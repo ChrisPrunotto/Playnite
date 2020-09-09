@@ -1,8 +1,10 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using Playnite;
 using Playnite.Common;
 using Playnite.SDK;
+using PlayniteServices.Filters;
 using PlayniteServices.Models.IGDB;
 using System;
 using System.Collections.Generic;
@@ -21,15 +23,28 @@ namespace PlayniteServices.Controllers.IGDB
         private static readonly object CacheLock = new object();
         private const string endpointPath = "games";
 
+        private AppSettings appSettings;
+
+        public GameController(IOptions<AppSettings> settings)
+        {
+            appSettings = settings.Value;
+        }
+
+        [ServiceFilter(typeof(PlayniteVersionFilter))]
         [HttpGet("{gameId}")]
         public async Task<ServicesResponse<Game>> Get(ulong gameId)
         {
+            return await GetItem(gameId);
+        }
+
+        public static async Task<ServicesResponse<Game>> GetItem(ulong gameId)
+        {
             return new ServicesResponse<Game>(await GetItem<Game>(gameId, endpointPath, CacheLock));
         }
-        
+
         // Only use for IGDB webhook.
         [HttpPost]
-        public ActionResult Post([FromBody]Game game)
+        public async Task<ActionResult> Post()
         {
             if (Request.Headers.TryGetValue("X-Secret", out var secret))
             {
@@ -38,12 +53,29 @@ namespace PlayniteServices.Controllers.IGDB
                     return BadRequest();
                 }
 
+                Game game = null;
+                string jsonString = null;
+                using (StreamReader reader = new StreamReader(Request.Body, Encoding.UTF8))
+                {
+                    jsonString = await reader.ReadToEndAsync();
+                    if (!string.IsNullOrEmpty(jsonString))
+                    {
+                        game = Serialization.FromJson<Game>(jsonString);
+                    }
+                }
+
+                if (game == null)
+                {
+                    logger.Error("Failed IGDB content serialization.");
+                    return Ok();
+                }
+
                 logger.Info($"Received game webhook from IGDB: {game.id}");
                 var cachePath = Path.Combine(IGDB.CacheDirectory, endpointPath, game.id + ".json");
                 lock (CacheLock)
                 {
-                    FileSystem.PrepareSaveFile(cachePath);                    
-                    System.IO.File.WriteAllText(cachePath, Serialization.ToJson(game));
+                    FileSystem.PrepareSaveFile(cachePath);
+                    System.IO.File.WriteAllText(cachePath, jsonString, Encoding.UTF8);
                 }
 
                 return Ok();
@@ -53,93 +85,132 @@ namespace PlayniteServices.Controllers.IGDB
         }
     }
 
+    [ServiceFilter(typeof(PlayniteVersionFilter))]
     [Route("igdb/game_parsed")]
     public class GameParsedController : Controller
     {
-        [HttpGet("{gameId}")]
-        public async Task<ServicesResponse<ParsedGame>> Get(ulong gameId)
+        private IOptions<AppSettings> appSettings;
+
+        public GameParsedController(IOptions<AppSettings> settings)
         {
-            var game = (await new GameController().Get(gameId)).Data;
-            var parsedGame = new ParsedGame()
+            appSettings = settings;
+        }
+
+        [HttpGet("{gameId}")]
+        public async Task<ServicesResponse<ExpandedGame>> Get(ulong gameId)
+        {
+            return new ServicesResponse<ExpandedGame>(await GetExpandedGame(gameId));
+        }
+
+        public async static Task<ExpandedGame> GetExpandedGame(ulong gameId)
+        {
+            var game = (await GameController.GetItem(gameId)).Data;
+            if (game.id == 0)
+            {
+                new ExpandedGame();
+            }
+
+            var parsedGame = new ExpandedGame()
             {
                 id = game.id,
                 name = game.name,
-                first_release_date = game.first_release_date,
-                cover = game.cover?.url,
-                websites = game.websites,
+                slug = game.slug,
+                url = game.url,
                 summary = game.summary,
+                storyline = game.storyline,
+                popularity = game.popularity,
+                version_title = game.version_title,
+                category = game.category,
+                first_release_date = game.first_release_date * 1000,
                 rating = game.rating,
                 aggregated_rating = game.aggregated_rating,
-                total_rating = game.total_rating,
-                alternative_names = game.alternative_names,
-                external = game.external,
-                screenshots = game.screenshots,
-                videos = game.videos,
-                artworks = game.artworks,
-                release_dates = game.release_dates
+                total_rating = game.total_rating
             };
 
-            if (game.developers?.Any() == true)
+            if (game.alternative_names?.Any() == true)
             {
-                parsedGame.developers = new List<string>();
-                foreach (var dev in game.developers)
+                parsedGame.alternative_names = new List<AlternativeName>();
+                foreach (var nameId in game.alternative_names)
                 {
-                    var dbDev = (await (new CompanyController()).Get(dev)).Data;
-                    parsedGame.developers.Add(dbDev.name);
+                    parsedGame.alternative_names.Add((await AlternativeNameController.GetItem(nameId)).Data);
                 }
             }
 
-            if (game.game_modes?.Any() == true)
+            if (game.involved_companies?.Any() == true)
             {
-                parsedGame.game_modes = new List<string>();
-                foreach (var mode in game.game_modes)
+                parsedGame.involved_companies = new List<ExpandedInvolvedCompany>();
+                foreach (var companyId in game.involved_companies)
                 {
-                    var dbMode = (await (new GameModeController()).Get(mode)).Data;
-                    parsedGame.game_modes.Add(dbMode.name);
+                    parsedGame.involved_companies.Add((await InvolvedCompanyController.GetItem(companyId)).Data);
                 }
             }
 
             if (game.genres?.Any() == true)
             {
-                parsedGame.genres = new List<string>();
-                foreach (var genre in game.genres)
+                parsedGame.genres_v3 = new List<Genre>();
+                foreach (var genreId in game.genres)
                 {
-                    var dbGenre = (await (new GenreController()).Get(genre)).Data;
-                    parsedGame.genres.Add(dbGenre.name);
+                    parsedGame.genres_v3.Add((await GenreController.GetItem(genreId)).Data);
                 }
             }
 
-            if (game.publishers?.Any() == true)
+            if (game.websites?.Any() == true)
             {
-                parsedGame.publishers = new List<string>();
-                foreach (var pub in game.publishers)
+                parsedGame.websites = new List<Website>();
+                foreach (var websiteId in game.websites)
                 {
-                    var dbDev = (await (new CompanyController()).Get(pub)).Data;
-                    parsedGame.publishers.Add(dbDev.name);
+                    parsedGame.websites.Add((await WebsiteController.GetItem(websiteId)).Data);
                 }
             }
 
-            if (game.themes?.Any() == true)
+            if (game.game_modes?.Any() == true)
             {
-                parsedGame.themes = new List<string>();
-                foreach (var theme in game.themes)
+                parsedGame.game_modes_v3 = new List<GameMode>();
+                foreach (var modeId in game.game_modes)
                 {
-                    var dbTheme = (await (new ThemeController()).Get(theme)).Data;
-                    parsedGame.themes.Add(dbTheme.name);
+                    parsedGame.game_modes_v3.Add((await GameModeController.GetItem(modeId)).Data);
                 }
             }
 
-            if (game.platforms?.Any() == true)
+            if (game.player_perspectives?.Any() == true)
             {
-                parsedGame.platforms = new List<string>();
-                foreach (var platform in game.platforms)
+                parsedGame.player_perspectives = new List<PlayerPerspective>();
+                foreach (var persId in game.player_perspectives)
                 {
-                    var dbPlatform = (await (new PlatformController()).Get(platform)).Data;
-                    parsedGame.platforms.Add(dbPlatform.name);
+                    parsedGame.player_perspectives.Add((await PlayerPerspectiveController.GetItem(persId)).Data);
                 }
             }
 
-            return new ServicesResponse<ParsedGame>(parsedGame);
+            if (game.cover > 0)
+            {
+                parsedGame.cover_v3 = (await CoverController.GetItem(game.cover)).Data;
+            }
+
+            if (game.artworks?.Any() == true)
+            {
+                parsedGame.artworks = new List<GameImage>();
+                foreach (var artworkId in game.artworks)
+                {
+                    parsedGame.artworks.Add((await ArtworkController.GetItem(artworkId)).Data);
+                }
+            }
+
+            if (game.screenshots?.Any() == true)
+            {
+                parsedGame.screenshots = new List<GameImage>();
+                foreach (var screenshotId in game.screenshots)
+                {
+                    parsedGame.screenshots.Add((await ScreenshotController.GetItem(screenshotId)).Data);
+                }
+            }
+
+            // fallback properties for 4.x
+            parsedGame.cover = parsedGame.cover_v3?.url;
+            parsedGame.publishers = parsedGame.involved_companies?.Where(a => a.publisher == true).Select(a => a.company.name).ToList();
+            parsedGame.developers = parsedGame.involved_companies?.Where(a => a.developer == true).Select(a => a.company.name).ToList();
+            parsedGame.genres = parsedGame.genres_v3?.Select(a => a.name).ToList();
+            parsedGame.game_modes = parsedGame.game_modes_v3?.Select(a => a.name).ToList();
+            return parsedGame;
         }
     }
 }

@@ -1,5 +1,5 @@
 ﻿using Newtonsoft.Json;
-using Playnite.Common.System;
+using Playnite.Common;
 using Playnite.SDK;
 using Playnite.SDK.Models;
 using Playnite.SDK.Plugins;
@@ -19,42 +19,18 @@ using TwitchLibrary.Services;
 
 namespace TwitchLibrary
 {
-    public class TwitchLibrary : ILibraryPlugin
+    public class TwitchLibrary : LibraryPlugin
     {
         private ILogger logger = LogManager.GetLogger();
-        private readonly IPlayniteAPI playniteApi;
         internal readonly string TokensPath;
         private const string dbImportMessageId = "twitchlibImportError";
 
         internal TwitchLibrarySettings LibrarySettings { get; private set; }
 
-        internal TwitchLoginData LoginData
+        public TwitchLibrary(IPlayniteAPI api) : base(api)
         {
-            get
-            {
-                if (!File.Exists(TokensPath))
-                {
-                    return null;
-                }
-
-                try
-                {
-                    return JsonConvert.DeserializeObject<TwitchLoginData>(File.ReadAllText(TokensPath));
-                }
-                catch (Exception e) when (!Environment.IsDebugBuild)
-                {
-                    logger.Error(e, "Failed to load twitch login information.");
-                    return null;
-                }
-            }
-        }
-
-        public TwitchLibrary(IPlayniteAPI api)
-        {
-            playniteApi = api;
-            LibraryIcon = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), @"Resources\twitchicon.png");
-            LibrarySettings = new TwitchLibrarySettings(this, playniteApi);
-            TokensPath = Path.Combine(api.GetPluginUserDataPath(this), "tokens.json");
+            LibrarySettings = new TwitchLibrarySettings(this, PlayniteApi);
+            TokensPath = Path.Combine(GetPluginUserDataPath(), "tokens.json");
         }
 
         public static GameAction GetPlayAction(string gameId)
@@ -67,9 +43,9 @@ namespace TwitchLibrary
             };
         }
 
-        internal Dictionary<string, Game> GetInstalledGames()
+        internal Dictionary<string, GameInfo> GetInstalledGames()
         {
-            var games = new Dictionary<string, Game>();
+            var games = new Dictionary<string, GameInfo>();
             var programs = Programs.GetUnistallProgramsList();
             foreach (var program in programs)
             {
@@ -86,11 +62,10 @@ namespace TwitchLibrary
                 var gameId = program.RegistryKeyName.Trim(new char[] { '{', '}' }).ToLower();
                 if (!games.ContainsKey(gameId))
                 {
-                    var game = new Game()
+                    var game = new GameInfo()
                     {
                         InstallDirectory = Paths.FixSeparators(program.InstallLocation),
                         GameId = gameId,
-                        PluginId = Id,
                         Source = "Twitch",
                         Name = program.DisplayName,
                         IsInstalled = true,
@@ -104,104 +79,100 @@ namespace TwitchLibrary
             return games;
         }
 
-        public List<Game> GetLibraryGames()
+        public string GetAuthToken()
         {
-            var login = LoginData;
-            if (login == null)
+            if (!Twitch.CookiesPath.IsNullOrEmpty() && File.Exists(Twitch.CookiesPath))
             {
-                throw new Exception("User is not logged in.");
-            }
-
-            var games = new List<Game>();
-            List<GoodsItem> libraryGames = null;
-
-            try
-            {
-                libraryGames = AmazonEntitlementClient.GetAccountEntitlements(login.AccountId, login.AccessToken);
-            }
-            catch (WebException libExc)
-            {
-                // Token renew doesn't properly based on expiration date, so try always to renew token for now until it's fixed.
-                logger.Warn(libExc, "Failed to download Twitch library at first attempt.");
                 try
                 {
-                    var client = new TwitchAccountClient(null, TokensPath);
-                    client.RenewTokens(login.AuthenticationToken, login.AccountId);
-                    login = LoginData;
+                    using (var db = new Sqlite(Twitch.CookiesPath, SqliteOpenFlags.ReadOnly))
+                    {
+                        var cookies = db.Query<TwitchCookie>("SELECT * FROM 'cookies' WHERE name='auth-token'");
+                        if (cookies.Count > 0)
+                        {
+                            return cookies[0].value;
+                        }
+                        else
+                        {
+                            logger.Error("No Twitch auth token found.");
+                        }
+                    }
                 }
-                catch (Exception renewExc)
+                catch (Exception e) when (!PlayniteApi.ApplicationInfo.ThrowAllErrors)
                 {
-                    logger.Error(renewExc, "Failed to renew Twitch authentication.");
-                }
-
-                try
-                {
-                    libraryGames = AmazonEntitlementClient.GetAccountEntitlements(login.AccountId, login.AccessToken);
-                }
-                catch (Exception e)
-                {
-                    logger.Error(e, "Failed to download Twitch library.");
-                    throw new Exception("Authentication is required.");
+                    logger.Error(e, "Failed to get Twitch auth token.");
                 }
             }
 
-            foreach (var item in libraryGames)
+            return null;
+        }
+
+        public List<GameInfo> GetLibraryGames()
+        {
+            var token = GetAuthToken();
+            if (token.IsNullOrEmpty())
+            {
+                throw new Exception("Authentication is required.");
+            }
+
+
+            var games = new List<GameInfo>();
+            var entitlements = AmazonEntitlementClient.GetAccountEntitlements(token);
+
+            foreach (var item in entitlements)
             {
                 if (item.product.productLine != "Twitch:FuelGame")
                 {
                     continue;
                 }
 
-                var game = new Game()
+                var game = new GameInfo()
                 {
-                    PluginId = Id,
                     Source = "Twitch",
                     GameId = item.product.id,
-                    Name = item.product.productTitle
+                    Name = item.product.title
                 };
 
                 games.Add(game);
             }
 
-            return games;            
+            return games;
         }
 
         #region ILibraryPlugin
 
-        public ILibraryClient Client { get; } = new TwitchClient();
-        
-        public string Name { get; } = "Twitch";
+        public override LibraryClient Client => new TwitchClient();
 
-        public string LibraryIcon { get; }
+        public override string Name => "Twitch";
 
-        public Guid Id { get; } = Guid.Parse("E2A7D494-C138-489D-BB3F-1D786BEEB675");
+        public override string LibraryIcon => Twitch.Icon;
 
-        public bool IsClientInstalled => Twitch.IsInstalled;
+        public override Guid Id => Guid.Parse("E2A7D494-C138-489D-BB3F-1D786BEEB675");
 
-        public void Dispose()
+        public override LibraryPluginCapabilities Capabilities { get; } = new LibraryPluginCapabilities
         {
+            CanShutdownClient = true
+        };
 
-        }
-
-        public ISettings GetSettings(bool firstRunSettings)
+        public override ISettings GetSettings(bool firstRunSettings)
         {
             return LibrarySettings;
         }
 
-        public UserControl GetSettingsView(bool firstRunView)
+        public override UserControl GetSettingsView(bool firstRunView)
         {
             return new TwitchLibrarySettingsView();
         }
 
-        public IGameController GetGameController(Game game)
+        public override IGameController GetGameController(Game game)
         {
-            return new TwitchGameController(game, this, playniteApi);
+            return new TwitchGameController(game, this, PlayniteApi);
         }
 
-        public IEnumerable<Game> GetGames()
+        public override IEnumerable<GameInfo> GetGames()
         {
-            var allGames = new List<Game>();
-            var installedGames = new Dictionary<string, Game>();
+            var allGames = new List<GameInfo>();
+            var installedGames = new Dictionary<string, GameInfo>();
             Exception importError = null;
 
             if (LibrarySettings.ImportInstalledGames)
@@ -212,21 +183,26 @@ namespace TwitchLibrary
                     logger.Debug($"Found {installedGames.Count} installed Twitch games.");
                     allGames.AddRange(installedGames.Values.ToList());
                 }
-                catch (Exception e)
+                catch (Exception e) when (!PlayniteApi.ApplicationInfo.ThrowAllErrors)
                 {
                     logger.Error(e, "Failed to import installed Twitch games.");
                     importError = e;
                 }
             }
 
-            if (LibrarySettings.ImportUninstalledGames)
+            if (LibrarySettings.ConnectAccount)
             {
                 try
                 {
-                    var uninstalled = GetLibraryGames();
-                    logger.Debug($"Found {uninstalled.Count} library Twitch games.");
+                    var libraryGames = GetLibraryGames();
+                    logger.Debug($"Found {libraryGames.Count} library Twitch games.");
 
-                    foreach (var game in uninstalled)
+                    if (!LibrarySettings.ImportUninstalledGames)
+                    {
+                        libraryGames = libraryGames.Where(lg => installedGames.ContainsKey(lg.GameId)).ToList();
+                    }
+
+                    foreach (var game in libraryGames)
                     {
                         if (installedGames.TryGetValue(game.GameId, out var installed))
                         {
@@ -239,32 +215,33 @@ namespace TwitchLibrary
                         }
                     }
                 }
-                catch (Exception e)
+                catch (Exception e) when (!PlayniteApi.ApplicationInfo.ThrowAllErrors)
                 {
-                    logger.Error(e, "Failed to import uninstalled Twitch games.");
+                    logger.Error(e, "Failed to import linked account Twitch games details.");
                     importError = e;
                 }
             }
 
             if (importError != null)
             {
-                playniteApi.Notifications.Add(
+                PlayniteApi.Notifications.Add(new NotificationMessage(
                     dbImportMessageId,
-                    string.Format(playniteApi.Resources.FindString("LOCLibraryImportError"), Name) +
+                    string.Format(PlayniteApi.Resources.GetString("LOCLibraryImportError"), Name) +
                     System.Environment.NewLine + importError.Message,
-                    NotificationType.Error);
+                    NotificationType.Error,
+                    () => OpenSettingsView()));
             }
             else
             {
-                playniteApi.Notifications.Remove(dbImportMessageId);
+                PlayniteApi.Notifications.Remove(dbImportMessageId);
             }
 
             return allGames;
         }
 
-        public ILibraryMetadataProvider GetMetadataDownloader()
+        public override LibraryMetadataProvider GetMetadataDownloader()
         {
-            return new TwitchMetadataProvider();
+            return new TwitchMetadataProvider(this);
         }
 
         #endregion ILibraryPlugin

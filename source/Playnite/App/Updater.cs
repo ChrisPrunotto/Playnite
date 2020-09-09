@@ -9,13 +9,13 @@ using System.Threading.Tasks;
 using Newtonsoft.Json;
 using NLog;
 using System.Windows;
-using Playnite.App;
 using Flurl;
-using Playnite.Web;
 using System.Net;
+using Playnite.Common;
+using Playnite.Common.Web;
 using Playnite.Settings;
 
-namespace Playnite.App
+namespace Playnite
 {
     public class Updater
     {
@@ -120,6 +120,25 @@ namespace Playnite.App
             return manifest.Packages.First(a => a.BaseVersion == manifest.LatestVersion);
         }
 
+        private bool VerifyUpdateFile(string checksum, string path)
+        {
+            var newMD5 = FileSystem.GetMD5(path);
+            if (newMD5 != checksum)
+            {
+                logger.Error($"Checksum of downloaded file doesn't match: {newMD5} vs {checksum}");
+                return false;
+            }
+
+#if !DEBUG
+            if (!SigningTools.IsTrusted(path))
+            {
+                return false;
+            }
+#endif
+
+            return true;
+        }
+
         public async Task DownloadUpdate(UpdateManifest.Package package, Action<DownloadProgressChangedEventArgs> progressHandler)
         {
             if (updateManifest == null)
@@ -129,8 +148,7 @@ namespace Playnite.App
 
             if (File.Exists(updaterPath))
             {
-                var md5 = FileSystem.GetMD5(updaterPath);
-                if (md5 == package.Checksum)
+                if (VerifyUpdateFile(package.Checksum, updaterPath))
                 {
                     logger.Info("Update already downloaded skipping download.");
                     return;
@@ -141,21 +159,21 @@ namespace Playnite.App
             {
                 var downloadUrls = updateManifest.DownloadServers.Select(a => Url.Combine(a, updateManifest.LatestVersion.ToString(), package.FileName));
                 await downloader.DownloadFileAsync(downloadUrls, updaterPath, progressHandler);
-                var md5 = FileSystem.GetMD5(updaterPath);
-                if (md5 != package.Checksum)
-                {
-                    throw new Exception($"Checksum of downloaded file doesn't match: {md5} vs {package.Checksum}");
-                }
             }
             catch (Exception e)
             {
-                logger.Warn(e, "Failed to download update file.");
+                logger.Error(e, "Failed to download update file.");
                 throw new Exception("Failed to download update file.");
+            }
+
+            if (!VerifyUpdateFile(package.Checksum, updaterPath))
+            {
+                throw new Exception($"Update file integrity check failed.");
             }
         }
 
         public void InstallUpdate()
-        {            
+        {
             var portable = PlayniteSettings.IsPortable ? "/PORTABLE" : "";
             logger.Info("Installing new update to {0}, in {1} mode", PlaynitePaths.ProgramPath, portable);
 
@@ -170,7 +188,6 @@ namespace Playnite.App
                 {
                     ProcessStarter.StartProcess(updaterPath, args, true);
                 }
-
             });
 
             playniteApp.Quit();
@@ -222,7 +239,7 @@ namespace Playnite.App
 
         public static Version GetCurrentVersion()
         {
-            return System.Reflection.Assembly.GetEntryAssembly().GetName().Version;
+            return System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
         }
 
         private string GetUpdateManifestData(string url)

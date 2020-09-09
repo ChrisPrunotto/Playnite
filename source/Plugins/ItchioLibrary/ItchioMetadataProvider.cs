@@ -1,9 +1,8 @@
-﻿using AngleSharp.Dom;
-using AngleSharp.Parser.Html;
+﻿using AngleSharp.Parser.Html;
+using Playnite.Common.Web;
 using Playnite.SDK;
 using Playnite.SDK.Metadata;
 using Playnite.SDK.Models;
-using Playnite.Web;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -16,34 +15,37 @@ using System.Threading.Tasks;
 
 namespace ItchioLibrary
 {
-    public class ItchioMetadataProvider : ILibraryMetadataProvider
+    public class ItchioMetadataProvider : LibraryMetadataProvider
     {
         private Butler butler;
+        private ItchioLibrary library;
 
-        public ItchioMetadataProvider()
+        public ItchioMetadataProvider(ItchioLibrary library)
         {
             butler = new Butler();
+            this.library = library;
         }
 
-        public void Dispose()
+        public override void Dispose()
         {
             butler.Dispose();
         }
 
         #region IMetadataProvider
 
-        public GameMetadata GetMetadata(Game game)
+        public override GameMetadata GetMetadata(Game game)
         {
-            var gameData = new Game()
+            var gameData = new GameInfo()
             {
-                Links = new ObservableCollection<Link>(),
-                Tags = new ComparableList<string>(),
-                Genres = new ComparableList<string>()
+                Links = new List<Link>(),
+                Tags = new List<string>(),
+                Genres = new List<string>(),
+                Features = new List<string>()
             };
 
             var metadata = new GameMetadata
             {
-                GameData = gameData
+                GameInfo = gameData
             };
 
             var itchGame = butler.GetGame(Convert.ToInt32(game.GameId));
@@ -51,18 +53,18 @@ namespace ItchioLibrary
             // Cover image
             if (!string.IsNullOrEmpty(itchGame.coverUrl))
             {
-                var cover = HttpDownloader.DownloadData(itchGame.coverUrl);
-                var coverFile = Path.GetFileName(itchGame.coverUrl);
-                metadata.Image = new MetadataFile(coverFile, cover);
+                metadata.CoverImage = new MetadataFile(itchGame.coverUrl);
             }
 
             if (!string.IsNullOrEmpty(itchGame.url))
             {
-                gameData.Links.Add(new Link("Store", itchGame.url));
+                gameData.Links.Add(new Link(
+                    library.PlayniteApi.Resources.GetString("LOCCommonLinksStorePage"),
+                    itchGame.url));
                 var gamePageSrc = HttpDownloader.DownloadString(itchGame.url);
                 var parser = new HtmlParser();
                 var gamePage = parser.Parse(gamePageSrc);
-                
+
                 // Description
                 gameData.Description = gamePage.QuerySelector(".formatted_description").InnerHtml;
 
@@ -71,20 +73,21 @@ namespace ItchioLibrary
                 var bckMatch = Regex.Match(gameTheme, @"background-image:\surl\((.+?)\)");
                 if (bckMatch.Success)
                 {
-                    metadata.BackgroundImage = bckMatch.Groups[1].Value;
-                    gameData.BackgroundImage = bckMatch.Groups[1].Value;
-                }                
+                    metadata.BackgroundImage = new MetadataFile(bckMatch.Groups[1].Value);
+                }
 
                 // Other info
                 var infoPanel = gamePage.QuerySelector(".game_info_panel_widget");
                 var fields = infoPanel.QuerySelectorAll("tr");
+                gameData.Links.Add(new Link("PCGamingWiki", @"http://pcgamingwiki.com/w/index.php?search=" + game.Name));
+
                 foreach (var field in fields)
                 {
                     var name = field.QuerySelectorAll("td")[0].TextContent;
                     if (name == "Genre")
                     {
                         foreach (var item in field.QuerySelectorAll("a"))
-                        {                            
+                        {
                             gameData.Genres.Add(item.TextContent);
                         }
 
@@ -95,7 +98,14 @@ namespace ItchioLibrary
                     {
                         foreach (var item in field.QuerySelectorAll("a"))
                         {
-                            gameData.Tags.Add(item.TextContent);
+                            if (item.TextContent == "Virtual Reality (VR)")
+                            {
+                                gameData.Features.Add("VR");
+                            }
+                            else
+                            {
+                                gameData.Tags.Add(item.TextContent);
+                            }
                         }
 
                         continue;
@@ -113,7 +123,7 @@ namespace ItchioLibrary
 
                     if (name == "Author")
                     {
-                        gameData.Developers = new ComparableList<string> { field.ChildNodes[1].TextContent };
+                        gameData.Developers = new List<string> { field.ChildNodes[1].TextContent };
                     }
 
                     if (name == "Release date")
@@ -122,7 +132,7 @@ namespace ItchioLibrary
                         if (DateTime.TryParseExact(strDate, "d MMMM yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dateTime))
                         {
                             gameData.ReleaseDate = dateTime;
-                        }                        
+                        }
                     }
                 }
             }

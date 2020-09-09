@@ -10,6 +10,9 @@ using Playnite.SDK.Models;
 using Moq;
 using Playnite.SDK;
 using Playnite.SDK.Plugins;
+using Playnite.API;
+using Playnite.Tests;
+using Playnite.Common;
 
 namespace OriginLibrary.Tests
 {
@@ -18,42 +21,30 @@ namespace OriginLibrary.Tests
     {
         public static OriginLibrary CreateLibrary()
         {
-            var api = new Mock<IPlayniteAPI>();
-            api.Setup(a => a.GetPluginUserDataPath(It.IsAny<ILibraryPlugin>())).Returns(() => OriginTests.TempPath);
-            return new OriginLibrary(api.Object);
+            return new OriginLibrary(PlayniteTests.GetTestingApi().Object);
         }
 
         [Test]
         public void GetInstalledGamesTest()
         {
             var originLib = CreateLibrary();
-            var games = originLib.GetInstalledGames(false);
+            var games = originLib.GetInstalledGames();
             Assert.AreNotEqual(0, games.Count);
 
             var game = games.Values.First();
-            Assert.AreNotEqual(game.PluginId, Guid.Empty);
             Assert.IsTrue(!string.IsNullOrEmpty(game.Name));
             Assert.IsTrue(!string.IsNullOrEmpty(game.GameId));
             Assert.IsTrue(Directory.Exists(game.InstallDirectory));
             Assert.IsNotNull(game.PlayAction);
 
-            foreach (Game g in games.Values)
+            foreach (var g in games.Values)
             {
                 if (g.PlayAction.Type == GameActionType.File)
                 {
-                    var file = Path.Combine(g.InstallDirectory, g.PlayAction.Path);
+                    var file = Path.Combine(g.InstallDirectory, g.ExpandVariables(g.PlayAction.Path));
                     Assert.IsTrue(File.Exists(file));
                 }
             }
-        }
-
-        [Test]
-        public void GetInstalledGamesCacheTest()
-        {
-            var originLib = CreateLibrary();
-            var games = originLib.GetInstalledGames(true);
-            var cacheFiles = Directory.GetFiles(Path.Combine(OriginTests.TempPath, "origincache"), "*.json");
-            Assert.IsTrue(cacheFiles.Count() > 0);
         }
 
         [Test]
@@ -61,10 +52,10 @@ namespace OriginLibrary.Tests
         {
             var originLib = CreateLibrary();
             var path = originLib.GetPathFromPlatformPath(@"[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PowerShell\\3\\PowerShellEngine\\ApplicationBase]\\powershell.exe");
-            Assert.IsTrue(File.Exists(path));
+            Assert.IsTrue(File.Exists(path.CompletePath));
 
-            path = originLib.GetPathFromPlatformPath(@"[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PowerShell\\3\\PowerShellEngine\\ApplicatioBase]\\powershell.exe");
-            Assert.IsTrue(string.IsNullOrEmpty(path));
+            path = originLib.GetPathFromPlatformPath(@"[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PowerShell\\3\\PowerShellEngine\\NonSense]\\powershell.exe");
+            Assert.IsNull(path);
         }
     }
 }

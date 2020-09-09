@@ -12,20 +12,6 @@ namespace Playnite.SDK.Models
     /// </summary>
     public class Platform : DatabaseObject
     {
-        private string name;
-        /// <summary>
-        /// Gets or sets platform name.
-        /// </summary>
-        public string Name
-        {
-            get => name;
-            set
-            {
-                name = value;
-                OnPropertyChanged();
-            }
-        }
-
         private string icon;
         /// <summary>
         /// Gets or sets platform icon.
@@ -54,6 +40,20 @@ namespace Playnite.SDK.Models
             }
         }
 
+        private string background;
+        /// <summary>
+        /// Gets or sets default game background image.
+        /// </summary>
+        public string Background
+        {
+            get => background;
+            set
+            {
+                background = value;
+                OnPropertyChanged();
+            }
+        }
+
         /// <summary>
         /// Creates new instance of Platform.
         /// </summary>
@@ -70,13 +70,43 @@ namespace Playnite.SDK.Models
             Name = name;
         }
 
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <returns></returns>
+        /// <inheritdoc/>
         public override string ToString()
         {            
             return Name;
+        }
+
+        /// <summary>
+        /// Gets empty platform.
+        /// </summary>
+        public static readonly Platform Empty = new Platform { Id = Guid.Empty, Name = string.Empty };
+
+        /// <inheritdoc/>
+        public override void CopyDiffTo(object target)
+        {
+            base.CopyDiffTo(target);
+
+            if (target is Platform tro)
+            {
+                if (!string.Equals(Icon, tro.Icon, StringComparison.Ordinal))
+                {
+                    tro.Icon = Icon;
+                }
+
+                if (!string.Equals(Cover, tro.Cover, StringComparison.Ordinal))
+                {
+                    tro.Cover = Cover;
+                }
+
+                if (!string.Equals(Background, tro.Background, StringComparison.Ordinal))
+                {
+                    tro.Background = Background;
+                }
+            }
+            else
+            {
+                throw new ArgumentException($"Target object has to be of type {GetType().Name}");
+            }
         }
     }
 }

@@ -1,5 +1,6 @@
 ﻿using EpicLibrary.Models;
 using EpicLibrary.Services;
+using Playnite.Common;
 using Playnite.SDK;
 using Playnite.SDK.Models;
 using Playnite.SDK.Plugins;
@@ -14,39 +15,54 @@ using System.Windows.Controls;
 
 namespace EpicLibrary
 {
-    public class EpicLibrary : ILibraryPlugin
-    {        
+    public class EpicLibrary : LibraryPlugin
+    {
         private ILogger logger = LogManager.GetLogger();
         private readonly IPlayniteAPI playniteApi;
         private const string dbImportMessageId = "epiclibImportError";
         internal readonly string TokensPath;
         internal readonly EpicLibrarySettings LibrarySettings;
 
-        public EpicLibrary(IPlayniteAPI api)
+        public EpicLibrary(IPlayniteAPI api) : base(api)
         {
             playniteApi = api;
             LibrarySettings = new EpicLibrarySettings(this, api);
-            LibraryIcon = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), @"Resources\epicicon.png");
-            TokensPath = Path.Combine(api.GetPluginUserDataPath(this), "tokens.json");
+            TokensPath = Path.Combine(GetPluginUserDataPath(), "tokens.json");
         }
 
-        internal Dictionary<string, Game> GetInstalledGames()
+        internal Dictionary<string, GameInfo> GetInstalledGames()
         {
-            var games = new Dictionary<string, Game>();
-            foreach (var app in EpicLauncher.GetInstalledAppList())
+            var games = new Dictionary<string, GameInfo>();
+            var appList = EpicLauncher.GetInstalledAppList();
+            var manifests = EpicLauncher.GetInstalledManifests();
+
+            foreach (var app in appList)
             {
                 if (app.AppName.StartsWith("UE_"))
                 {
                     continue;
                 }
 
-                var game = new Game()
+                var manifest = manifests.FirstOrDefault(a => a.AppName == app.AppName);
+
+                // DLC
+                if (manifest.AppName != manifest.MainGameAppName)
                 {
-                    PluginId = Id,
+                    continue;
+                }
+
+                // UE plugins
+                if (manifest.AppCategories?.Any(a => a == "plugins" || a == "plugins/engine") == true)
+                {
+                    continue;
+                }
+
+                var game = new GameInfo()
+                {
                     Source = "Epic",
                     GameId = app.AppName,
-                    Name = Path.GetFileName(app.InstallLocation),
-                    InstallDirectory = app.InstallLocation,
+                    Name = manifest?.DisplayName ?? Path.GetFileName(app.InstallLocation),
+                    InstallDirectory = manifest?.InstallLocation ?? app.InstallLocation,
                     IsInstalled = true,
                     PlayAction = new GameAction()
                     {
@@ -62,31 +78,38 @@ namespace EpicLibrary
             return games;
         }
 
-        internal List<Game> GetLibraryGames()
+        internal List<GameInfo> GetLibraryGames()
         {
-            var games = new List<Game>();
+            var cacheDir = GetCachePath("catalogcache");
+            var games = new List<GameInfo>();
             var accountApi = new EpicAccountClient(playniteApi, TokensPath);
             var assets = accountApi.GetAssets();
             if (!assets?.Any() == true)
             {
                 logger.Warn("Found no assets on Epic accounts.");
             }
-            
+
             foreach (var gameAsset in assets.Where(a => a.@namespace != "ue"))
             {
-                var catalogItem = accountApi.GetCatalogItem(gameAsset.@namespace, gameAsset.catalogItemId);
-                if (catalogItem?.categories?.Where(a => a.path == "applications").Any() != true)
+                var cacheFile = Paths.GetSafeFilename($"{gameAsset.@namespace}_{gameAsset.catalogItemId}_{gameAsset.buildVersion}.json");
+                cacheFile = Path.Combine(cacheDir, cacheFile);
+                var catalogItem = accountApi.GetCatalogItem(gameAsset.@namespace, gameAsset.catalogItemId, cacheFile);
+                if (catalogItem?.categories?.Any(a => a.path == "applications") != true)
                 {
                     continue;
                 }
 
-                games.Add(new Game()
+                if (catalogItem?.categories?.Any(a => a.path == "dlc") == true)
                 {
-                    PluginId = Id,
+                    continue;
+                }
+
+                games.Add(new GameInfo()
+                {
                     Source = "Epic",
                     GameId = gameAsset.appName,
                     Name = catalogItem.title,
-                });                
+                });
             }
 
             return games;
@@ -94,40 +117,39 @@ namespace EpicLibrary
 
         #region ILibraryPlugin
 
-        public ILibraryClient Client { get; } = new EpicClient();
+        public override LibraryClient Client => new EpicClient();
 
-        public string Name { get; } = "Epic";
+        public override string Name => "Epic";
 
-        public string LibraryIcon { get; }
+        public override string LibraryIcon => EpicLauncher.Icon;
 
-        public bool IsClientInstalled => EpicLauncher.IsInstalled;
+        public override Guid Id => Guid.Parse("00000002-DBD1-46C6-B5D0-B1BA559D10E4");
 
-        public Guid Id { get; } = Guid.Parse("00000002-DBD1-46C6-B5D0-B1BA559D10E4");
-
-        public void Dispose()
+        public override LibraryPluginCapabilities Capabilities { get; } = new LibraryPluginCapabilities
         {
+            CanShutdownClient = true
+        };
 
-        }
-
-        public ISettings GetSettings(bool firstRunSettings)
+        public override ISettings GetSettings(bool firstRunSettings)
         {
+            LibrarySettings.IsFirstRunUse = firstRunSettings;
             return LibrarySettings;
         }
 
-        public UserControl GetSettingsView(bool firstRunView)
+        public override UserControl GetSettingsView(bool firstRunView)
         {
             return new EpicLibrarySettingsView();
         }
 
-        public IGameController GetGameController(Game game)
+        public override IGameController GetGameController(Game game)
         {
-            return new EpicGameController(game, playniteApi);
+            return new EpicGameController(game, playniteApi, LibrarySettings);
         }
 
-        public IEnumerable<Game> GetGames()
+        public override IEnumerable<GameInfo> GetGames()
         {
-            var allGames = new List<Game>();
-            var installedGames = new Dictionary<string, Game>();
+            var allGames = new List<GameInfo>();
+            var installedGames = new Dictionary<string, GameInfo>();
             Exception importError = null;
 
             if (LibrarySettings.ImportInstalledGames)
@@ -145,14 +167,19 @@ namespace EpicLibrary
                 }
             }
 
-            if (LibrarySettings.ImportUninstalledGames)
+            if (LibrarySettings.ConnectAccount)
             {
                 try
                 {
-                    var uninstalled = GetLibraryGames();
-                    logger.Debug($"Found {uninstalled.Count} library Epic games.");
+                    var libraryGames = GetLibraryGames();
+                    logger.Debug($"Found {libraryGames.Count} library Epic games.");
 
-                    foreach (var game in uninstalled)
+                    if (!LibrarySettings.ImportUninstalledGames)
+                    {
+                        libraryGames = libraryGames.Where(lg => installedGames.ContainsKey(lg.GameId)).ToList();
+                    }
+
+                    foreach (var game in libraryGames)
                     {
                         if (installedGames.TryGetValue(game.GameId, out var installed))
                         {
@@ -168,18 +195,19 @@ namespace EpicLibrary
                 }
                 catch (Exception e)
                 {
-                    logger.Error(e, "Failed to import uninstalled Epic games.");
+                    logger.Error(e, "Failed to import linked account Epic games details.");
                     importError = e;
                 }
             }
 
             if (importError != null)
             {
-                playniteApi.Notifications.Add(
+                playniteApi.Notifications.Add(new NotificationMessage(
                     dbImportMessageId,
-                    string.Format(playniteApi.Resources.FindString("LOCLibraryImportError"), Name) +
+                    string.Format(playniteApi.Resources.GetString("LOCLibraryImportError"), Name) +
                     System.Environment.NewLine + importError.Message,
-                    NotificationType.Error);
+                    NotificationType.Error,
+                    () => OpenSettingsView()));
             }
             else
             {
@@ -189,9 +217,14 @@ namespace EpicLibrary
             return allGames;
         }
 
-        public ILibraryMetadataProvider GetMetadataDownloader()
+        public override LibraryMetadataProvider GetMetadataDownloader()
         {
-            return null;
+            return new EpicMetadataProvider(this, PlayniteApi);
+        }
+
+        public string GetCachePath(string dirName)
+        {
+            return Path.Combine(GetPluginUserDataPath(), dirName);
         }
 
         #endregion ILibraryPlugin

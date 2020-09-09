@@ -7,7 +7,7 @@
     [ValidateSet("x86", "x64")]
     [string]$Platform = "x86",
 
-    # File path with list of values for PlayniteUI.exe.config
+    # File path with list of values for Common.config
     [string]$ConfigUpdatePath,
 
     # Target directory for build files    
@@ -93,8 +93,8 @@ function CreateDirectoryDiff()
         [string]$OutPath
     )
     
-    $baseDirFiles = Get-ChildItem $BaseDir -Recurse | ForEach { Get-FileHash -Path $_.FullName -Algorithm MD5 }
-    $targetDirFiles = Get-ChildItem $TargetDir -Recurse | ForEach { Get-FileHash -Path $_.FullName -Algorithm MD5 }
+    $baseDirFiles = Get-ChildItem $BaseDir -Recurse -File | ForEach { Get-FileHash -Path $_.FullName -Algorithm MD5 }
+    $targetDirFiles = Get-ChildItem $TargetDir -Recurse -File | ForEach { Get-FileHash -Path $_.FullName -Algorithm MD5 }
     $diffs = Compare-Object -ReferenceObject $baseDirFiles -DifferenceObject $targetDirFiles -Property Hash -PassThru | Where { $_.SideIndicator -eq "=>" } | Select-Object Path        
     New-EmptyFolder $OutPath
 
@@ -110,7 +110,7 @@ function CreateDirectoryDiff()
     New-EmptyFolder $tempPath
     Copy-Item (Join-Path $BaseDir "*") $tempPath -Recurse -Force
     Copy-Item (Join-Path $OutPath "*")  $tempPath -Recurse -Force
-    $tempPathFiles = Get-ChildItem $tempPath -Recurse | ForEach { Get-FileHash -Path $_.FullName -Algorithm MD5 }
+    $tempPathFiles = Get-ChildItem $tempPath -Recurse -File | ForEach { Get-FileHash -Path $_.FullName -Algorithm MD5 }
     $tempDiff = Compare-Object -ReferenceObject $targetDirFiles -DifferenceObject $tempPathFiles -Property Hash -PassThru
     
     # Ignore removed files
@@ -123,6 +123,32 @@ function CreateDirectoryDiff()
 
     Remove-Item $tempPath -Recurse -Force
 }
+
+function PackExtensionTemplate()
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TemplateRootName,        
+        [Parameter(Mandatory = $true)]
+        [string]$OutputDir
+    )
+
+    $templatesDir = Join-Path $OutputDir "Templates\Extensions\"
+    $templateOutDir = Join-Path $templatesDir $TemplateRootName
+    $tempFiles = Get-Content "..\source\Tools\Playnite.Toolbox\Templates\Extensions\$TemplateRootName\BuildInclude.txt" | Where { ![string]::IsNullOrEmpty($_) }
+    $targetZip = Join-Path $templatesDir "$TemplateRootName.zip"
+    foreach ($file in $tempFiles)
+    {
+        $target = Join-Path $templateOutDir $file
+        New-FolderFromFilePath $target
+        Copy-Item (Join-Path "..\source\Tools\Playnite.Toolbox\Templates\Extensions\$TemplateRootName" $file) $target        
+    }
+
+    New-ZipFromDirectory $templateOutDir $targetZip
+    Remove-Item $templateOutDir -Recurse -Force
+} 
+
+.\VerifyLanguageFiles.ps1
 
 if ($Sign)
 {
@@ -138,20 +164,11 @@ if (!$SkipBuild)
     {
         Remove-Item $OutputDir -Recurse -Force
     }
-
-    # Restore NuGet packages
-    if (-not (Test-Path "nuget.exe"))
-    {
-        Invoke-WebRequest -Uri $NugetUrl -OutFile "nuget.exe"
-    }
-
-    $nugetProc = Start-Process "nuget.exe" "restore ..\source\Playnite.sln" -PassThru -NoNewWindow
-    $handle = $nugetProc.Handle
-    $nugetProc.WaitForExit()
-
+    
     $solutionDir = Join-Path $pwd "..\source"
-    $msbuildPath = "c:\Program Files (x86)\Microsoft Visual Studio\2017\Community\MSBuild\15.0\Bin\MSBuild.exe";
-    $arguments = "build.xml /p:SolutionDir=`"$solutionDir`" /p:OutputPath=`"$OutputDir`";Configuration=$configuration /property:Platform=$Platform /t:Build";
+    Invoke-Nuget "restore ..\source\Playnite.sln"
+    $msbuildpath = Get-MsBuildPath
+    $arguments = "build.xml /p:SolutionDir=`"$solutionDir`" /p:OutputPath=`"$OutputDir`";Configuration=$configuration /property:Platform=$Platform /t:Build"
     $compilerResult = StartAndWait $msbuildPath $arguments
     if ($compilerResult -ne 0)
     {
@@ -164,9 +181,18 @@ if (!$SkipBuild)
             Join-Path $OutputDir "Playnite.dll" | SignFile
             Join-Path $OutputDir "Playnite.Common.dll" | SignFile
             Join-Path $OutputDir "Playnite.SDK.dll" | SignFile
+            Join-Path $OutputDir "Playnite.DesktopApp.exe" | SignFile
+            Join-Path $OutputDir "Playnite.FullscreenApp.exe" | SignFile
             Join-Path $OutputDir "PlayniteUI.exe" | SignFile
         }
     }
+
+    # Copy extension templates
+    PackExtensionTemplate "CustomLibraryPlugin" $OutputDir
+    PackExtensionTemplate "CustomMetadataPlugin" $OutputDir
+    PackExtensionTemplate "GenericPlugin" $OutputDir
+    PackExtensionTemplate "IronPythonScript" $OutputDir
+    PackExtensionTemplate "PowerShellScript" $OutputDir
 }
 
 # -------------------------------------------
@@ -175,7 +201,7 @@ if (!$SkipBuild)
 if ($ConfigUpdatePath)
 {
     Write-OperationLog "Updating config values..."
-    $configPath = Join-Path $OutputDir "PlayniteUI.exe.config"
+    $configPath = Join-Path $OutputDir "Common.config"
     [xml]$configXml = Get-Content $configPath
     $customConfigContent = Get-Content $ConfigUpdatePath
 
@@ -191,9 +217,9 @@ if ($ConfigUpdatePath)
 
         Write-DebugLog "Settings config value $proName : $proValue"
 
-        if ($configXml.configuration.appSettings.add.key -contains $proName)
+        if ($configXml.appSettings.add.key -contains $proName)
         {
-            $node = $configXml.configuration.appSettings.add | Where { $_.key -eq $proName }
+            $node = $configXml.appSettings.add | Where { $_.key -eq $proName }
             $node.value = $proValue
         }
         else
@@ -201,14 +227,14 @@ if ($ConfigUpdatePath)
             $node = $configXml.CreateElement("add")
             $node.SetAttribute("key", $proName)
             $node.SetAttribute("value", $proValue)
-            $configXml.configuration.appSettings.AppendChild($node) | Out-Null
+            $configXml.appSettings.AppendChild($node) | Out-Null
         }
     }
 
     $configXml.Save($configPath)
 }
 
-$buildNumber = (Get-ChildItem (Join-Path $OutputDir "PlayniteUI.exe")).VersionInfo.ProductVersion
+$buildNumber = (Get-ChildItem (Join-Path $OutputDir "Playnite.dll")).VersionInfo.ProductVersion
 $buildNumber = $buildNumber -replace "\.0\.\d+$", ""
 $buildNumberPlain = $buildNumber.Replace(".", "")
 New-Folder $InstallerDir
@@ -266,13 +292,7 @@ if ($Portable)
 {
     Write-OperationLog "Building portable package..."
     $packageName = Join-Path $BuildsStorageDir "Playnite$buildNumberPlain.zip"
-    if (Test-path $packageName)
-    {
-        Remove-Item $packageName
-    }
-
-    Add-Type -assembly "System.IO.Compression.Filesystem" | Out-Null
-    [IO.Compression.ZipFile]::CreateFromDirectory($OutputDir, $packageName, "Optimal", $false) 
+    New-ZipFromDirectory $OutputDir $packageName
 }
 
 if ($Sign)

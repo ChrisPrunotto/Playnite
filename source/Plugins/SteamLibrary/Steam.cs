@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using SteamKit2;
+using System.Reflection;
 
 namespace SteamLibrary
 {
@@ -89,10 +90,7 @@ namespace SteamLibrary
             }
         }
 
-        public static string GetWorkshopUrl(uint appId)
-        {
-            return $"https://steamcommunity.com/app/{appId}/workshop/";
-        }
+        public static string Icon => Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), @"Resources\steamicon.png");
 
         public static AppState GetAppState(GameID id)
         {
@@ -122,7 +120,7 @@ namespace SteamLibrary
                     state.Installing = true;
                 }
             }
-           
+
             if (id.IsMod && state.Installed)
             {
                 // Base app is installed, but the mod itself might not be.

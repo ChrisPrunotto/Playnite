@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Playnite;
+using PlayniteServices.Filters;
 using PlayniteServices.Models.Steam;
 using System;
 using System.Collections.Generic;
@@ -10,6 +11,7 @@ using System.Threading.Tasks;
 
 namespace PlayniteServices.Controllers.Steam
 {
+    [ServiceFilter(typeof(PlayniteVersionFilter))]
     [Route("steam/appinfo")]
     public class AppInfoController : Controller
     {
@@ -26,7 +28,8 @@ namespace PlayniteServices.Controllers.Steam
                 if (System.IO.File.Exists(cachePath))
                 {
                     var fileInfo = new FileInfo(cachePath);
-                    if ((fileInfo.LastWriteTime - DateTime.Now).TotalHours <= Steam.AppInfoCacheTimeout)
+                    fileInfo.Refresh();
+                    if ((DateTime.Now - fileInfo.LastWriteTime).TotalHours <= Steam.AppInfoCacheTimeout)
                     {
                         return new ServicesResponse<string>(System.IO.File.ReadAllText(cachePath));
                     }
@@ -53,7 +56,7 @@ namespace PlayniteServices.Controllers.Steam
             var cachePath = Path.Combine(Steam.CacheDirectory, cacheDir, appId + ".txt");
             lock (CacheLock)
             {
-                FileSystem.PrepareSaveFile(cachePath);
+                Playnite.Common.FileSystem.PrepareSaveFile(cachePath);
                 System.IO.File.WriteAllText(cachePath, data);
             }
 

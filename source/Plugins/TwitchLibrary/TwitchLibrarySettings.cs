@@ -1,7 +1,7 @@
 ﻿using Newtonsoft.Json;
 using Playnite;
 using Playnite.SDK;
-using PlayniteUI.Commands;
+using Playnite.Commands;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -9,6 +9,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using TwitchLibrary.Services;
+using Playnite.Common;
 
 namespace TwitchLibrary
 {
@@ -19,11 +20,17 @@ namespace TwitchLibrary
         private TwitchLibrary library;
         private IPlayniteAPI api;
 
-        #region Settings      
+        #region Settings
+
+        public int Version { get; set; }
 
         public bool ImportInstalledGames { get; set; } = true;
 
+        public bool ConnectAccount { get; set; } = false;
+
         public bool ImportUninstalledGames { get; set; } = false;
+
+        public bool StartGamesWithoutLauncher { get; set; } = false;
 
         #endregion Settings
 
@@ -32,19 +39,22 @@ namespace TwitchLibrary
         {
             get
             {
-                if (library.LoginData == null)
+                var token = library.GetAuthToken();
+                if (token.IsNullOrEmpty())
                 {
                     return false;
                 }
-
-                try
+                else
                 {
-                    library.GetLibraryGames();
-                    return true;
-                }
-                catch
-                {
-                    return false;
+                    try
+                    {
+                        AmazonEntitlementClient.GetAccountEntitlements(token);
+                        return true;
+                    }
+                    catch
+                    {
+                        return false;
+                    }
                 }
             }
         }
@@ -67,16 +77,26 @@ namespace TwitchLibrary
             this.library = library;
             this.api = api;
 
-            var settings = api.LoadPluginSettings<TwitchLibrarySettings>(library);
+            var settings = library.LoadPluginSettings<TwitchLibrarySettings>();
             if (settings != null)
             {
+                if (settings.Version == 0)
+                {
+                    logger.Debug("Updating Twitch settings from version 0.");
+                    if (settings.ImportUninstalledGames)
+                    {
+                        settings.ConnectAccount = true;
+                    }
+                }
+
+                settings.Version = 1;
                 LoadValues(settings);
             }
         }
 
         public void BeginEdit()
         {
-            editingClone = this.CloneJson();
+            editingClone = this.GetClone();
         }
 
         public void CancelEdit()
@@ -86,7 +106,7 @@ namespace TwitchLibrary
 
         public void EndEdit()
         {
-            api.SavePluginSettings(library, this);
+            library.SavePluginSettings(this);
         }
 
         public bool VerifySettings(out List<string> errors)
@@ -100,16 +120,26 @@ namespace TwitchLibrary
             source.CopyProperties(this, false, null, true);
         }
 
+        public class Cookie
+        {
+            public string value { get; set; }
+        }
+
         private void Login()
         {
             try
             {
-                using (var view = api.WebViews.CreateView(400, 600))
+                if (!Twitch.IsInstalled)
                 {
-                    var api = new TwitchAccountClient(view, library.TokensPath);
-                    api.Login();
+                    api.Dialogs.ShowErrorMessage(
+                        string.Format(api.Resources.GetString("LOCClientNotInstalledError"), "Twitch"),
+                        "");
+                    return;
                 }
 
+                api.Dialogs.ShowMessage(string.Format(api.Resources.GetString("LOCSignInExternalNotif"), "Twitch"));
+                Twitch.StartClient();
+                api.Dialogs.ShowMessage(api.Resources.GetString("LOCSignInExternalWaitMessage"));
                 OnPropertyChanged(nameof(IsUserLoggedIn));
             }
             catch (Exception e) when (!Environment.IsDebugBuild)

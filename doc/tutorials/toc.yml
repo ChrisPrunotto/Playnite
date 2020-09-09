@@ -1,5 +1,8 @@
 - name: Introduction
   href: intro.md
+
+- name: Toolbox utility
+  href: toolbox.md
   
 - name: Scripting
   items:
@@ -22,8 +25,29 @@
       href: plugins/genericPlugins.md
     - name: Library Plugins
       href: plugins/libraryPlugins.md
+    - name: Metadata Plugins
+      href: plugins/metadataPlugins.md
     - name: Plugin settings
       href: plugins/pluginSettings.md
+    - name: Playnite URI support
+      href: plugins/uriSupport.md
+
+- name: Themes
+  items:
+    - name: Introduction
+      href: themes/introduction.md
+    - name: Using designer
+      href: themes/usingDesigner.md
+    - name: Manual editing
+      href: themes/manualEditing.md
+    - name: Distribution and updates
+      href: themes/distributionAndUpdates.md
+    - name: Various
+      href: themes/various.md
+    - name: Installing themes
+      href: themes/installing.md
+    - name: Manifest file
+      href: themes/manifestFile.md
 
 - name: Docs
   items:

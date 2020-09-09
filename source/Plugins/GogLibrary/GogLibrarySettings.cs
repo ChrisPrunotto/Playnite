@@ -7,7 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
-using PlayniteUI.Commands;
+using Playnite.Commands;
 using Playnite.SDK;
 using GogLibrary.Services;
 
@@ -22,17 +22,20 @@ namespace GogLibrary
 
         #region Settings
 
+        public int Version { get; set; }
+
         public bool ImportInstalledGames { get; set; } = true;
 
+        public bool ConnectAccount { get; set; } = false;
+
         public bool ImportUninstalledGames { get; set; } = false;
-
-        public string AccountName { get; set; }
-
-        public bool UsePublicAccount { get; set; } = false;
 
         public bool StartGamesUsingGalaxy { get; set; } = false;
 
         #endregion Settings
+
+        [JsonIgnore]
+        public bool IsFirstRunUse { get; set; }
 
         [JsonIgnore]
         public bool IsUserLoggedIn
@@ -65,16 +68,26 @@ namespace GogLibrary
             this.api = api;
             this.library = library;
 
-            var settings = api.LoadPluginSettings<GogLibrarySettings>(library);
+            var settings = library.LoadPluginSettings<GogLibrarySettings>();
             if (settings != null)
             {
+                if (settings.Version == 0)
+                {
+                    logger.Debug("Updating GOG settings from version 0.");
+                    if (settings.ImportUninstalledGames)
+                    {
+                        settings.ConnectAccount = true;
+                    }
+                }
+
+                settings.Version = 1;
                 LoadValues(settings);
             }
         }
 
         public void BeginEdit()
         {
-            editingClone = this.CloneJson();
+            editingClone = this.GetClone();
         }
 
         public void CancelEdit()
@@ -84,20 +97,13 @@ namespace GogLibrary
 
         public void EndEdit()
         {
-            api.SavePluginSettings(library, this);
+            library.SavePluginSettings(this);
         }
 
         public bool VerifySettings(out List<string> errors)
         {
             var allValid = true;
             errors = new List<string>();
-
-            if (ImportUninstalledGames && UsePublicAccount && string.IsNullOrEmpty(AccountName))
-            {
-                errors.Add(api.Resources.FindString("LOCSettingsInvalidAccountName"));
-                allValid = false;
-            }
-
             return allValid;
         }
 

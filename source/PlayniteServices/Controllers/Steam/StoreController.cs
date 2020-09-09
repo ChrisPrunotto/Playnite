@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Playnite;
+using PlayniteServices.Filters;
 using PlayniteServices.Models.Steam;
 using System;
 using System.Collections.Generic;
@@ -10,6 +11,7 @@ using System.Threading.Tasks;
 
 namespace PlayniteServices.Controllers.Steam
 {
+    [ServiceFilter(typeof(PlayniteVersionFilter))]
     [Route("steam/store")]
     public class StoreController : Controller
     {
@@ -51,7 +53,7 @@ namespace PlayniteServices.Controllers.Steam
             var cachePath = Path.Combine(Steam.CacheDirectory, cacheDir, appId + ".json");
             lock (CacheLock)
             {
-                FileSystem.PrepareSaveFile(cachePath);
+                Playnite.Common.FileSystem.PrepareSaveFile(cachePath);
                 System.IO.File.WriteAllText(cachePath, data);
             }
 

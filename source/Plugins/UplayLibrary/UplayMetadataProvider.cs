@@ -1,5 +1,4 @@
-﻿using Playnite;
-using Playnite.Common.System;
+﻿using Playnite.Common;
 using Playnite.SDK;
 using Playnite.SDK.Metadata;
 using Playnite.SDK.Models;
@@ -12,37 +11,66 @@ using System.Threading.Tasks;
 
 namespace UplayLibrary
 {
-    public class UplayMetadataProvider : ILibraryMetadataProvider
+    public class UplayMetadataProvider : LibraryMetadataProvider
     {
-        #region IMetadataProvider
+        private static readonly ILogger logger = LogManager.GetLogger();
+        private readonly List<Models.ProductInformation> productInfo;
 
-        public GameMetadata GetMetadata(Game game)
+        public UplayMetadataProvider()
         {
-            var gameData = game.CloneJson();
-            var data = UpdateGameWithMetadata(gameData);
-            return new GameMetadata(gameData, data.Icon, data.Image, data.BackgroundImage);
+            try
+            {
+                productInfo = Uplay.GetLocalProductCache();
+            }
+            catch (Exception e)
+            {
+                logger.Error(e, "Failed to get Uplay product info from cache.");
+            }
         }
 
-        #endregion IMetadataProvider
-
-        public GameMetadata UpdateGameWithMetadata(Game game)
+        public override GameMetadata GetMetadata(Game game)
         {
-            var metadata = new GameMetadata();
-            var program = Programs.GetUnistallProgramsList().FirstOrDefault(a => a.RegistryKeyName == "Uplay Install " + game.GameId);
-            if (program == null)
+            var gameInfo = new GameInfo
             {
-                return metadata;
+                Links = new List<Link>()
+            };
+
+            gameInfo.Links.Add(new Link("PCGamingWiki", @"http://pcgamingwiki.com/w/index.php?search=" + gameInfo.Name));
+            var metadata = new GameMetadata()
+            {
+                GameInfo = gameInfo
+            };
+
+            var prod = productInfo?.FirstOrDefault(a => a.uplay_id.ToString() == game.GameId);
+            if (prod != null)
+            {
+                if (!prod.root.icon_image.IsNullOrEmpty())
+                {
+                    metadata.Icon = new MetadataFile(prod.root.icon_image);
+                }
+
+                if (!prod.root.thumb_image.IsNullOrEmpty())
+                {
+                    metadata.CoverImage = new MetadataFile(prod.root.thumb_image);
+                }
+
+                if (!prod.root.background_image.IsNullOrEmpty())
+                {
+                    metadata.BackgroundImage = new MetadataFile(prod.root.background_image);
+                }
+            }
+            else
+            {
+                var program = Programs.GetUnistallProgramsList().FirstOrDefault(a => a.RegistryKeyName == "Uplay Install " + game.GameId);
+                if (program != null)
+                {
+                    if (!string.IsNullOrEmpty(program.DisplayIcon) && File.Exists(program.DisplayIcon))
+                    {
+                        metadata.Icon = new MetadataFile(program.DisplayIcon);
+                    }
+                }
             }
 
-            if (!string.IsNullOrEmpty(program.DisplayIcon) && File.Exists(program.DisplayIcon))
-            {
-                var iconPath = program.DisplayIcon;
-                var iconFile = Path.GetFileName(iconPath);
-                var data = File.ReadAllBytes(iconPath);
-                metadata.Icon = new MetadataFile(iconFile, data);
-            }
-
-            game.Name = StringExtensions.NormalizeGameName(program.DisplayName);
             return metadata;
         }
     }

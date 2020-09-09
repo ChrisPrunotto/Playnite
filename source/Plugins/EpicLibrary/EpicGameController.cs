@@ -1,4 +1,5 @@
 ﻿using Playnite;
+using Playnite.Common;
 using Playnite.SDK;
 using Playnite.SDK.Events;
 using Playnite.SDK.Models;
@@ -15,16 +16,35 @@ namespace EpicLibrary
 {
     public class EpicGameController : BaseGameController
     {
+        private static List<string> launchelessExceptions = new List<string>
+        {
+            "Duckbill", // Yooka-Laylee and the Impossible Lair
+            "Vulture", // Faeria
+            "Stellula", // Farming Simulator 19
+            "Albacore", // Assassins Creed Syndicate
+            "Sundrop",      // For Honor
+            "Wombat",       // World War Z
+            "Eel",          // Kingdom Come Deliverance
+            "Dodo",         // Borderlands 2
+            "Turkey",       // Borderlands TPS
+            "Kinglet",      // Civ 6
+            "9d2d0eb64d5c44529cece33fe2a46482", // GTA 5
+            "UnrealTournamentDev",  // Unreal Tournament 4
+        };
+
+        private static ILogger logger = LogManager.GetLogger();
         private CancellationTokenSource watcherToken;
         private ProcessMonitor procMon;
         private Stopwatch stopWatch;
         private readonly IPlayniteAPI api;
         private readonly Game game;
+        private readonly EpicLibrarySettings settings;
 
-        public EpicGameController(Game game, IPlayniteAPI api) : base(game)
+        public EpicGameController(Game game, IPlayniteAPI api, EpicLibrarySettings settings) : base(game)
         {
             this.api = api;
             this.game = game;
+            this.settings = settings;
         }
 
         public override void Dispose()
@@ -34,32 +54,64 @@ namespace EpicLibrary
 
         public void ReleaseResources()
         {
+            watcherToken?.Cancel();
             procMon?.Dispose();
         }
 
         public override void Play()
         {
             ReleaseResources();
-            if (Game.PlayAction.Type == GameActionType.URL && Game.PlayAction.Path.StartsWith("com.epicgames.launcher", StringComparison.OrdinalIgnoreCase))
+            OnStarting(this, new GameControllerEventArgs(this, 0));
+            var startUri = string.Format(EpicLauncher.GameLaunchUrlMask, game.GameId);
+            var startViaLauncher = true;
+            Models.InstalledManifiest manifest = null;
+
+            if (!launchelessExceptions.Contains(game.GameId) && settings.StartGamesWithoutLauncher)
             {
-                OnStarting(this, new GameControllerEventArgs(this, 0));
-                GameActionActivator.ActivateAction(Game.PlayAction);
-                if (Directory.Exists(Game.InstallDirectory))
+                manifest = EpicLauncher.GetInstalledManifests().FirstOrDefault(a => a.AppName == game.GameId);
+                if (manifest?.bCanRunOffline == true)
                 {
-                    stopWatch = Stopwatch.StartNew();
-                    procMon = new ProcessMonitor();
-                    procMon.TreeStarted += ProcMon_TreeStarted;
-                    procMon.TreeDestroyed += Monitor_TreeDestroyed;
-                    procMon.WatchDirectoryProcesses(Game.InstallDirectory, false);
+                    startViaLauncher = false;
                 }
-                else
-                {
-                    OnStopped(this, new GameControllerEventArgs(this, 0));
-                }
+            }
+
+            if (startViaLauncher)
+            {
+                ProcessStarter.StartUrl(startUri);
             }
             else
             {
-                throw new Exception("Unknown Epic action configuration.");
+                try
+                {
+                    var path = Path.Combine(manifest.InstallLocation, manifest.LaunchExecutable);
+                    var defaultArgs = $" -epicapp={game.GameId} -epicenv=Prod -EpicPortal";
+                    if (manifest.LaunchCommand.IsNullOrEmpty())
+                    {
+                        ProcessStarter.StartProcess(path, defaultArgs);
+                    }
+                    else
+                    {
+                        ProcessStarter.StartProcess(path, manifest.LaunchCommand + defaultArgs);
+                    }
+                }
+                catch (Exception e)
+                {
+                    logger.Error(e, "Failed to start Epic game directly.");
+                    ProcessStarter.StartUrl(startUri);
+                }
+            }
+
+            if (Directory.Exists(Game.InstallDirectory))
+            {
+                stopWatch = Stopwatch.StartNew();
+                procMon = new ProcessMonitor();
+                procMon.TreeStarted += ProcMon_TreeStarted;
+                procMon.TreeDestroyed += Monitor_TreeDestroyed;
+                procMon.WatchDirectoryProcesses(Game.InstallDirectory, false);
+            }
+            else
+            {
+                OnStopped(this, new GameControllerEventArgs(this, 0));
             }
         }
 
@@ -100,20 +152,20 @@ namespace EpicLibrary
                 var app = installed?.FirstOrDefault(a => a.AppName == Game.GameId);
                 if (app != null)
                 {
-                    if (Game.PlayAction == null)
+                    var installInfo = new GameInfo
                     {
-                        Game.PlayAction = new GameAction()
+                        InstallDirectory = app.InstallLocation,
+                        PlayAction = new GameAction()
                         {
                             Type = GameActionType.URL,
                             Path = string.Format(EpicLauncher.GameLaunchUrlMask, app.AppName),
                             IsHandledByPlugin = true
-                        };
-                    }
+                        }
+                    };
 
-                    Game.InstallDirectory = app.InstallLocation;
-                    OnInstalled(this, new GameControllerEventArgs(this, 0));
+                    OnInstalled(this, new GameInstalledEventArgs(installInfo, this, 0));
                     return;
-                }
+                };
 
                 await Task.Delay(5000);
             }

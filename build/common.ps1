@@ -45,6 +45,59 @@ function global:Start-SigningWatcher()
     } -ArgumentList $Pass
 }
 
+function global:Invoke-Nuget()
+{
+    param(
+        [string]$NugetArgs
+    ) 
+
+    $nugetCommand = Get-Command -Name "nuget" -Type Application -ErrorAction Ignore
+    if (-not $nugetCommand)
+    {
+        if (-not (Test-Path "nuget.exe"))
+        {
+            Invoke-WebRequest -Uri $NugetUrl -OutFile "nuget.exe"
+        }
+    }
+
+    if ($nugetCommand)
+    {
+        return StartAndWait "nuget" $NugetArgs
+    }
+    else
+    {      
+        return StartAndWait ".\nuget.exe" $NugetArgs
+    }
+}
+
+function global:Get-MsBuildPath()
+{
+    $VSWHERE_CMD = "vswhere"
+
+    if (-not (Get-Command -Name $VSWHERE_CMD -Type Application -ErrorAction Ignore))
+    {
+        $VSWHERE_CMD = "..\source\packages\vswhere.2.6.7\tools\vswhere.exe"
+        if (-not (Get-Command -Name $VSWHERE_CMD -Type Application -ErrorAction Ignore))
+        {
+            Invoke-Nuget "install vswhere -Version 2.6.7 -SolutionDirectory `"$solutionDir`""
+        }
+    }
+
+    $path = & $VSWHERE_CMD -version "[15.0,16.0)" -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" -latest | Select-Object -First 1
+    if ($path -and (Test-Path $path))
+    {
+        return $path
+    }
+
+    $path = & $VSWHERE_CMD -version "[16.0,17.0)" -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" -latest | Select-Object -First 1
+    if ($path -and (Test-Path $path))
+    {
+        return $path
+    }
+
+    throw "MS Build not found."
+}
+
 function global:Stop-SigningWatcher()
 {
     Write-OperationLog "Stopping signing watcher..."
@@ -64,8 +117,8 @@ function global:SignFile()
     process
     {
         Write-Host "Signing file `"$Path`"" -ForegroundColor Green
-        $signToolPath = "c:\Program Files (x86)\Windows Kits\10\bin\10.0.17134.0\x86\signtool.exe"
-        $res = StartAndWait $signToolPath ('sign /n "Open Source Developer, Josef Němec" /t http://time.certum.pl /v /sha1 FE916C2B41F1DB83F0C972274CB8CD03BF79B0DA ' + "`"$Path`"")
+        $signToolPath = (Resolve-Path "c:\Program Files*\Windows Kits\*\bin\*\x86\signtool.exe").Path
+        $res = StartAndWait $signToolPath ('sign /n "Open Source Developer, Josef Němec" /t http://time.certum.pl /v ' + "`"$Path`"")
         if ($res -ne 0)
         {        
             throw "Failed to sign file."
@@ -88,6 +141,22 @@ function global:New-Folder()
     mkdir $Path | Out-Null
 }
 
+function global:New-FolderFromFilePath()
+{
+    param(
+        [Parameter(Position = 0, Mandatory = $true, ValueFromPipeline = $true)]
+        [string]$FilePath        
+    )
+
+    $dirPath = Split-Path $FilePath
+    if (Test-Path $dirPath)
+    {
+        return
+    }
+
+    mkdir $dirPath | Out-Null
+}
+
 function global:New-EmptyFolder()
 {
     param(
@@ -101,6 +170,23 @@ function global:New-EmptyFolder()
     }
 
     mkdir $Path | Out-Null
+}
+
+function global:New-ZipFromDirectory()
+{
+    param(
+        [string]$directory,
+        [string]$resultZipPath,
+        [bool]$includeBaseDirectory = $false
+    )
+
+    if (Test-path $resultZipPath)
+    {
+        Remove-Item $resultZipPath
+    }
+
+    Add-Type -assembly "System.IO.Compression.Filesystem" | Out-Null
+    [IO.Compression.ZipFile]::CreateFromDirectory($directory, $resultZipPath, "Optimal", $includeBaseDirectory) 
 }
 
 function global:Write-OperationLog()

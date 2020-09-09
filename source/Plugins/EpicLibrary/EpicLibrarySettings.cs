@@ -2,7 +2,7 @@
 using Newtonsoft.Json;
 using Playnite;
 using Playnite.SDK;
-using PlayniteUI.Commands;
+using Playnite.Commands;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -23,13 +23,22 @@ namespace EpicLibrary
         private EpicLibrary library;
         private IPlayniteAPI api;
 
-        #region Settings      
+        #region Settings
+
+        public int Version { get; set; }
 
         public bool ImportInstalledGames { get; set; } = EpicLauncher.IsInstalled;
 
+        public bool ConnectAccount { get; set; } = false;
+
         public bool ImportUninstalledGames { get; set; } = false;
 
+        public bool StartGamesWithoutLauncher { get; set; } = false;
+
         #endregion Settings
+
+        [JsonIgnore]
+        public bool IsFirstRunUse { get; set; }
 
         [JsonIgnore]
         public bool IsUserLoggedIn
@@ -58,16 +67,26 @@ namespace EpicLibrary
             this.library = library;
             this.api = api;
 
-            var settings = api.LoadPluginSettings<EpicLibrarySettings>(library);
+            var settings = library.LoadPluginSettings<EpicLibrarySettings>();
             if (settings != null)
             {
+                if (settings.Version == 0)
+                {
+                    logger.Debug("Updating Epic settings from version 0.");
+                    if (settings.ImportUninstalledGames)
+                    {
+                        settings.ConnectAccount = true;
+                    }
+                }
+
+                settings.Version = 1;
                 LoadValues(settings);
             }
         }
 
         public void BeginEdit()
         {
-            editingClone = this.CloneJson();
+            editingClone = this.GetClone();
         }
 
         public void CancelEdit()
@@ -77,7 +96,7 @@ namespace EpicLibrary
 
         public void EndEdit()
         {
-            api.SavePluginSettings(library, this);
+            library.SavePluginSettings(this);
         }
 
         public bool VerifySettings(out List<string> errors)
@@ -101,7 +120,7 @@ namespace EpicLibrary
             }
             catch (Exception e) when (!Debugger.IsAttached)
             {
-                api.Dialogs.ShowErrorMessage(api.Resources.FindString("LOCNotLoggedInError"), "");
+                api.Dialogs.ShowErrorMessage(api.Resources.GetString("LOCNotLoggedInError"), "");
                 logger.Error(e, "Failed to authenticate user.");
             }
         }

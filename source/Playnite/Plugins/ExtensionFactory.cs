@@ -13,27 +13,18 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
+using Playnite.Common;
+using Playnite.SDK.Models;
+using System.IO.Compression;
 
 namespace Playnite.Plugins
 {
-    public class LoadedLibraryPlugin
+    public class LoadedPlugin
     {
-        public ILibraryPlugin Plugin { get; set; }
-        public ExtensionDescription Description { get; set; }
+        public Plugin Plugin { get; }
+        public ExtensionDescription Description { get; }
 
-        public LoadedLibraryPlugin(ILibraryPlugin plugin, ExtensionDescription description)
-        {
-            Plugin = plugin;
-            Description = description;
-        }
-    }
-
-    public class LoadedGenericPlugin
-    {
-        public IGenericPlugin Plugin { get; set; }
-        public ExtensionDescription Description { get; set; }
-
-        public LoadedGenericPlugin(IGenericPlugin plugin, ExtensionDescription description)
+        public LoadedPlugin(Plugin plugin, ExtensionDescription description)
         {
             Plugin = plugin;
             Description = description;
@@ -43,21 +34,29 @@ namespace Playnite.Plugins
     public class ExtensionFactory : ObservableObject, IDisposable
     {
         private static ILogger logger = LogManager.GetLogger();
-        private GameDatabase database;
+        private IGameDatabase database;
         private GameControllerFactory controllers;
 
-        public const string ExtensionManifestFileName = "extension.yaml";
-
-        public Dictionary<Guid, LoadedLibraryPlugin> LibraryPlugins
+        public Dictionary<Guid, LoadedPlugin> Plugins
         {
             get;
-        } = new Dictionary<Guid, LoadedLibraryPlugin>();
+        } = new Dictionary<Guid, LoadedPlugin>();
 
-        public Dictionary<Guid, LoadedGenericPlugin> GenericPlugins
+        public List<LibraryPlugin> LibraryPlugins
         {
-            get;
-        } = new Dictionary<Guid, LoadedGenericPlugin>();
-        
+            get => Plugins.Where(a => a.Value.Description.Type == ExtensionType.GameLibrary).Select(a => (LibraryPlugin)a.Value.Plugin).ToList();
+        }
+
+        public List<MetadataPlugin> MetadataPlugins
+        {
+            get => Plugins.Where(a => a.Value.Description.Type == ExtensionType.MetadataProvider).Select(a => (MetadataPlugin)a.Value.Plugin).ToList();
+        }
+
+        public List<Plugin> GenericPlugins
+        {
+            get => Plugins.Where(a => a.Value.Description.Type == ExtensionType.GenericPlugin).Select(a => (Plugin)a.Value.Plugin).ToList();
+        }
+
         public  List<PlayniteScript> Scripts
         {
             get;
@@ -111,7 +110,7 @@ namespace Playnite.Plugins
             }
         }
 
-        public ExtensionFactory(GameDatabase database, GameControllerFactory controllers)
+        public ExtensionFactory(IGameDatabase database, GameControllerFactory controllers)
         {
             this.database = database;
             this.controllers = controllers;
@@ -120,20 +119,17 @@ namespace Playnite.Plugins
             controllers.Started += Controllers_Started;
             controllers.Stopped += Controllers_Stopped;
             controllers.Uninstalled += Controllers_Uninstalled;
-            database.DatabaseOpened += Database_DatabaseOpened;
         }
 
         public void Dispose()
         {
-            DisposeLibraryPlugins();
-            DisposeGenericPlugins();
+            DisposePlugins();
             DisposeScripts();
             controllers.Installed -= Controllers_Installed;
             controllers.Starting -= Controllers_Starting;
             controllers.Started -= Controllers_Installed;
             controllers.Stopped -= Controllers_Installed;
             controllers.Uninstalled -= Controllers_Installed;
-            database.DatabaseOpened -= Database_DatabaseOpened;
         }
 
         private void DisposeScripts()
@@ -146,9 +142,9 @@ namespace Playnite.Plugins
                     {
                         script.Dispose();
                     }
-                        catch (Exception e) when (!PlayniteEnvironment.ThrowAllErrors)
+                    catch (Exception e) when (!PlayniteEnvironment.ThrowAllErrors)
                     {
-                        logger.Error(e, $"Failed to dispose library plugin {script.Name}");
+                        logger.Error(e, $"Failed to dispose script {script.Name}");
                     }
             }
             }
@@ -157,44 +153,24 @@ namespace Playnite.Plugins
             ScriptFunctions = null;
         }
 
-        private void DisposeLibraryPlugins()
+        private void DisposePlugins()
         {
-            if (LibraryPlugins?.Any() == true)
+            if (Plugins?.Any() == true)
             {
-                foreach (var provider in LibraryPlugins.Keys)
+                foreach (var provider in Plugins.Keys)
                 {
                     try
                     {
-                        LibraryPlugins[provider].Plugin.Dispose();
+                        Plugins[provider].Plugin.Dispose();
                     }
                     catch (Exception e) when (!PlayniteEnvironment.ThrowAllErrors)
                     {
-                        logger.Error(e, $"Failed to dispose library plugin {provider}");
+                        logger.Error(e, $"Failed to dispose plugin {provider}");
                     }
                 }
             }
 
-            LibraryPlugins?.Clear();
-        }
-
-        private void DisposeGenericPlugins()
-        {
-            if (GenericPlugins?.Any() == true)
-            {
-                foreach (var provider in GenericPlugins.Keys)
-                {
-                    try
-                    {
-                        GenericPlugins[provider].Plugin.Dispose();
-                    }
-                    catch (Exception e) when (!PlayniteEnvironment.ThrowAllErrors)
-                    {
-                        logger.Error(e, $"Failed to dispose generic plugin {provider}");
-                    }
-                }
-            }
-
-            GenericPlugins?.Clear();
+            Plugins?.Clear();
             PluginFunctions = null;
         }
 
@@ -208,6 +184,31 @@ namespace Playnite.Plugins
             }
         }
 
+        public static ExtensionDescription GetDescriptionFromPackedFile(string path)
+        {
+            using (var zip = ZipFile.OpenRead(path))
+            {
+                var manifest = zip.GetEntry(PlaynitePaths.ExtensionManifestFileName);
+                if (manifest == null)
+                {
+                    return null;
+                }
+
+                using (var logStream = manifest.Open())
+                {
+                    using (TextReader tr = new StreamReader(logStream))
+                    {
+                        return Serialization.FromYaml<ExtensionDescription>(tr.ReadToEnd());
+                    }
+                }
+            }
+        }
+
+        public static ExtensionDescription GetDescriptionFromFile(string path)
+        {
+            return Serialization.FromYaml<ExtensionDescription>(File.ReadAllText(path));
+        }
+
         public List<ExtensionDescription> GetExtensionDescriptors()
         {
             var descs = new List<ExtensionDescription>();
@@ -219,12 +220,43 @@ namespace Playnite.Plugins
                 }
                 catch (Exception e) when (!PlayniteEnvironment.ThrowAllErrors)
                 {
-                    logger.Error(e.InnerException, $"Failed to parse plugin description: {file}");
+                    logger.Error(e, $"Failed to parse plugin description: {file}");
                     continue;
                 }
             }
 
             return descs;
+        }
+
+        public static ExtensionDescription InstallFromPackedFile(string path)
+        {
+            logger.Info($"Installing extenstion {path}");
+            var desc = GetDescriptionFromPackedFile(path);
+            if (desc == null)
+            {
+                throw new FileNotFoundException("Extenstion manifest not found.");
+            }
+
+            var installDir = Paths.GetSafeFilename(desc.Name).Replace(" ", string.Empty) + "_" + (desc.Name + desc.Author).MD5();
+            var targetDir = PlayniteSettings.IsPortable ? PlaynitePaths.ExtensionsProgramPath : PlaynitePaths.ExtensionsUserDataPath;
+            targetDir = Path.Combine(targetDir, installDir);
+            var oldBackPath = targetDir + "_old";
+
+            if (Directory.Exists(targetDir))
+            {
+                logger.Debug($"Replacing existing extenstion installation: {targetDir}.");
+                Directory.Move(targetDir, oldBackPath);
+            }
+
+            FileSystem.CreateDirectory(targetDir, true);
+            ZipFile.ExtractToDirectory(path, targetDir);
+
+            if (Directory.Exists(oldBackPath))
+            {
+                Directory.Delete(oldBackPath, true);
+            }
+
+            return GetDescriptionFromFile(Path.Combine(targetDir, PlaynitePaths.ExtensionManifestFileName));
         }
 
         private List<string> GetExtensionDescriptorFiles()
@@ -234,9 +266,9 @@ namespace Playnite.Plugins
 
             if (!PlayniteSettings.IsPortable && Directory.Exists(PlaynitePaths.ExtensionsUserDataPath))
             {
-                var enumerator = new SafeFileEnumerator(PlaynitePaths.ExtensionsUserDataPath, ExtensionManifestFileName, SearchOption.AllDirectories);
+                var enumerator = new SafeFileEnumerator(PlaynitePaths.ExtensionsUserDataPath, PlaynitePaths.ExtensionManifestFileName, SearchOption.AllDirectories);
                 foreach (var desc in enumerator)
-                {       
+                {
                     plugins.Add(desc.FullName);
                     var info = new FileInfo(desc.FullName);
                     added.Add(info.Directory.Name);
@@ -245,7 +277,7 @@ namespace Playnite.Plugins
 
             if (Directory.Exists(PlaynitePaths.ExtensionsProgramPath))
             {
-                var enumerator = new SafeFileEnumerator(PlaynitePaths.ExtensionsProgramPath, ExtensionManifestFileName, SearchOption.AllDirectories);
+                var enumerator = new SafeFileEnumerator(PlaynitePaths.ExtensionsProgramPath, PlaynitePaths.ExtensionManifestFileName, SearchOption.AllDirectories);
                 foreach (var desc in enumerator)
                 {
                     plugins.Add(desc.FullName);
@@ -257,18 +289,22 @@ namespace Playnite.Plugins
             return plugins;
         }
 
-        private void VerifySdkReference(Assembly asm)
+        private bool VerifySdkReference(Assembly asm)
         {
             var sdkReference = asm.GetReferencedAssemblies().FirstOrDefault(a => a.Name == "Playnite.SDK");
             if (sdkReference == null)
             {
-                throw new Exception($"Assembly doesn't reference Playnite SDK.");
+                logger.Error($"Assembly doesn't reference Playnite SDK.");
+                return false;
             }
 
-            if (sdkReference.Version.Major != SDK.Version.SDKVersion.Major)
+            if (sdkReference.Version.Major != SDK.SdkVersions.SDKVersion.Major)
             {
-                throw new Exception($"Plugin doesn't support this version of Playnite SDK.");
+                logger.Error($"Plugin doesn't support this version of Playnite SDK.");
+                return false;
             }
+
+            return true;
         }
 
         public bool LoadScripts(IPlayniteAPI injectingApi, List<string> ignoreList)
@@ -302,8 +338,8 @@ namespace Playnite.Plugins
                     allSuccess = false;
                     logger.Error(e, $"Failed to load script file {scriptPath}");
                     continue;
-                }                
-                
+                }
+
                 Scripts.Add(script);
                 logger.Info($"Loaded script extension: {scriptPath}");
 
@@ -317,87 +353,61 @@ namespace Playnite.Plugins
             return allSuccess;
         }
 
-        public void LoadLibraryPlugins(IPlayniteAPI injectingApi, List<string> ignoreList)
+        public void LoadPlugins(IPlayniteAPI injectingApi, List<string> ignoreList)
         {
-            DisposeLibraryPlugins();
-            foreach (var desc in GetExtensionDescriptors().Where(a => a.Type == ExtensionType.GameLibrary && ignoreList?.Contains(a.FolderName) != true))
-            {
-                try
-                {
-                    var plugin =  LoadPlugin<ILibraryPlugin>(desc, injectingApi);
-                    LibraryPlugins.Add(plugin.Id, new LoadedLibraryPlugin(plugin, desc));
-                    logger.Info($"Loaded library plugin: {desc.Name}");
-                }
-                catch (Exception e) when (!PlayniteEnvironment.ThrowAllErrors)
-                {
-                    logger.Error(e.InnerException, $"Failed to load library plugin: {desc.Name}");
-                }
-            }
-        }
-
-        public void LoadGenericPlugins(IPlayniteAPI injectingApi, List<string> ignoreList)
-        {
-            DisposeGenericPlugins();
+            DisposePlugins();
             var funcs = new List<ExtensionFunction>();
-            foreach (var desc in GetExtensionDescriptors().Where(a => a.Type == ExtensionType.GenericPlugin && ignoreList?.Contains(a.FolderName) != true))
+            foreach (var desc in GetExtensionDescriptors().Where(a => a.Type != ExtensionType.Script && ignoreList?.Contains(a.FolderName) != true))
             {
                 try
                 {
-                    var plugin = LoadPlugin<IGenericPlugin>(desc, injectingApi);
-                    GenericPlugins.Add(plugin.Id, new LoadedGenericPlugin(plugin, desc));
-                    var plugFunc = plugin.GetFunctions();
-                    if (plugFunc?.Any() == true)
+                    var plugins = LoadPlugins(desc, injectingApi);
+                    foreach (var plugin in plugins)
                     {
-                        funcs.AddRange(plugFunc);
-                    }
+                        Plugins.Add(plugin.Id, new LoadedPlugin(plugin, desc));
+                        var plugFunc = plugin.GetFunctions();
+                        if (plugFunc?.Any() == true)
+                        {
+                            funcs.AddRange(plugFunc);
+                        }
 
-                    logger.Info($"Loaded generic plugin: {desc.Name}");
+                        logger.Info($"Loaded plugin: {desc.Name}");
+                    }
                 }
                 catch (Exception e) when (!PlayniteEnvironment.ThrowAllErrors)
                 {
-                    logger.Error(e.InnerException, $"Failed to load generic plugin: {desc.Name}");
+                    logger.Error(e.InnerException, $"Failed to load plugin: {desc.Name}");
                 }
             }
 
             PluginFunctions = funcs;
         }
 
-        // TODO: support multiple plugins from one assembly (not sure if it's worth it)
-        public TPlugin LoadPlugin<TPlugin>(ExtensionDescription descriptor, IPlayniteAPI injectingApi) where TPlugin : IPlugin
+        public IEnumerable<Plugin> LoadPlugins(ExtensionDescription descriptor, IPlayniteAPI injectingApi)
         {
-            var plugins = new List<TPlugin>();
             var asmPath = Path.Combine(Path.GetDirectoryName(descriptor.DescriptionPath), descriptor.Module);
             var asmName = AssemblyName.GetAssemblyName(asmPath);
             var assembly = Assembly.Load(asmName);
-            VerifySdkReference(assembly);
-
-            var asmTypes = assembly.GetTypes();
-            Type pluginType = null;
-            foreach (Type type in asmTypes)
+            if (VerifySdkReference(assembly))
             {
-                if (type.IsInterface || type.IsAbstract)
+                foreach (Type type in assembly.GetTypes())
                 {
-                    continue;
-                }
-                else
-                {
-                    if (typeof(TPlugin).IsAssignableFrom(type))
+                    if (type.IsInterface || type.IsAbstract)
                     {
-                        pluginType = type;
-                        break;
+                        continue;
+                    }
+                    else
+                    {
+                        if (typeof(Plugin).IsAssignableFrom(type))
+                        {
+                            yield return (Plugin)Activator.CreateInstance(type, new object[] { injectingApi });
+                        }
                     }
                 }
             }
-
-            if (pluginType != null)
-            {
-                return (TPlugin)Activator.CreateInstance(pluginType, new object[] { injectingApi });
-            }
-
-            return default(TPlugin);
         }
 
-        public bool InvokeExtension(ExtensionFunction function, out string error)
+        public bool InvokeExtension(ExtensionFunction function, out Exception error)
         {
             try
             {
@@ -409,7 +419,7 @@ namespace Playnite.Plugins
             catch (Exception e) when (!PlayniteEnvironment.ThrowAllErrors)
             {
                 logger.Error(e, $"Failed to execute extension function.");
-                error = e.Message;
+                error = e;
                 return false;
             }
         }
@@ -428,7 +438,7 @@ namespace Playnite.Plugins
                 }
             }
 
-            foreach (var plugin in GenericPlugins.Values)
+            foreach (var plugin in Plugins.Values)
             {
                 try
                 {
@@ -455,7 +465,7 @@ namespace Playnite.Plugins
                 }
             }
 
-            foreach (var plugin in GenericPlugins.Values)
+            foreach (var plugin in Plugins.Values)
             {
                 try
                 {
@@ -482,7 +492,7 @@ namespace Playnite.Plugins
                 }
             }
 
-            foreach (var plugin in GenericPlugins.Values)
+            foreach (var plugin in Plugins.Values)
             {
                 try
                 {
@@ -509,7 +519,7 @@ namespace Playnite.Plugins
                 }
             }
 
-            foreach (var plugin in GenericPlugins.Values)
+            foreach (var plugin in Plugins.Values)
             {
                 try
                 {
@@ -536,7 +546,7 @@ namespace Playnite.Plugins
                 }
             }
 
-            foreach (var plugin in GenericPlugins.Values)
+            foreach (var plugin in Plugins.Values)
             {
                 try
                 {
@@ -549,7 +559,35 @@ namespace Playnite.Plugins
             }
         }
 
-        private void Database_DatabaseOpened(object sender, EventArgs args)
+        public void InvokeOnGameSelected(List<Game> oldValue, List<Game> newValue)
+        {
+            var args = new GameSelectionEventArgs(oldValue, newValue);
+            foreach (var script in Scripts)
+            {
+                try
+                {
+                    script.OnGameSelected(args);
+                }
+                catch (Exception e)
+                {
+                    logger.Error(e, $"Failed to load execute OnGameSelected method from {script.Name} script.");
+                }
+            }
+
+            foreach (var plugin in Plugins.Values)
+            {
+                try
+                {
+                    plugin.Plugin.OnGameSelected(args);
+                }
+                catch (Exception e)
+                {
+                    logger.Error(e, $"Failed to load execute OnGameSelected method from {plugin.Description.Name} plugin.");
+                }
+            }
+        }
+
+        public void NotifiyOnApplicationStarted()
         {
             foreach (var script in Scripts)
             {
@@ -559,12 +597,11 @@ namespace Playnite.Plugins
                 }
                 catch (Exception e)
                 {
-                    logger.Error(e, $"Failed to load execute OnScriptLoaded method from {script.Name} script.");
-                    continue;
+                    logger.Error(e, $"Failed to load execute OnApplicationStarted method from {script.Name} script.");
                 }
             }
 
-            foreach (var plugin in GenericPlugins.Values)
+            foreach (var plugin in Plugins.Values)
             {
                 try
                 {
@@ -572,9 +609,68 @@ namespace Playnite.Plugins
                 }
                 catch (Exception e)
                 {
-                    logger.Error(e, $"Failed to load execute OnLoaded method from {plugin.Description.Name} plugin.");
+                    logger.Error(e, $"Failed to load execute OnApplicationStarted method from {plugin.Description.Name} plugin.");
                 }
             }
+        }
+
+        public void NotifiyOnApplicationStopped()
+        {
+            foreach (var script in Scripts)
+            {
+                try
+                {
+                    script.OnApplicationStopped();
+                }
+                catch (Exception e)
+                {
+                    logger.Error(e, $"Failed to load execute OnApplicationStopped method from {script.Name} script.");
+                }
+            }
+
+            foreach (var plugin in Plugins.Values)
+            {
+                try
+                {
+                    plugin.Plugin.OnApplicationStopped();
+                }
+                catch (Exception e)
+                {
+                    logger.Error(e, $"Failed to load execute OnApplicationStopped method from {plugin.Description.Name} plugin.");
+                }
+            }
+        }
+
+        public void NotifiyOnLibraryUpdated()
+        {
+            foreach (var script in Scripts)
+            {
+                try
+                {
+                    script.OnLibraryUpdated();
+                }
+                catch (Exception e)
+                {
+                    logger.Error(e, $"Failed to load execute OnLibraryUpdated method from {script.Name} script.");
+                }
+            }
+
+            foreach (var plugin in Plugins.Values)
+            {
+                try
+                {
+                    plugin.Plugin.OnLibraryUpdated();
+                }
+                catch (Exception e)
+                {
+                    logger.Error(e, $"Failed to load execute OnLibraryUpdated method from {plugin.Description.Name} plugin.");
+                }
+            }
+        }
+
+        public LibraryPlugin GetLibraryPlugin(Guid pluginId)
+        {
+            return LibraryPlugins.FirstOrDefault(a => a.Id == pluginId);
         }
     }
 }

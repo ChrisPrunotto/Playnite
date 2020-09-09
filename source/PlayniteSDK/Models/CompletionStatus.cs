@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -9,23 +10,47 @@ namespace Playnite.SDK.Models
     /// <summary>
     /// Represents game completion status.
     /// </summary>
-    public enum CompletionStatus
+    public enum CompletionStatus : int
     {
         /// <summary>
-        /// Game has not been played yet.
+        /// Represents "Not Played" completion status.
         /// </summary>
-        NotPlayed,
+        [Description("LOCCompletionStatusNotPlayed")]
+        NotPlayed = 0,
         /// <summary>
-        /// Game has been played.
+        /// Represents Played completion status.
         /// </summary>
-        Played,
+        [Description("LOCCompletionStatusPlayed")]
+        Played = 1,
         /// <summary>
-        /// Main storyline has been beaten.
+        /// Represents Beaten completion status.
         /// </summary>
-        Beaten,
+        [Description("LOCCompletionStatusBeaten")]
+        Beaten = 2,
         /// <summary>
-        /// Game has been fully completed.
+        /// Represents Completed completion status.
         /// </summary>
-        Completed
+        [Description("LOCCompletionStatusCompleted")]
+        Completed = 3,
+        /// <summary>
+        /// Represents Playing completion status.
+        /// </summary>
+        [Description("LOCCompletionStatusPlaying")]
+        Playing = 4,
+        /// <summary>
+        /// Represents Abandoned completion status.
+        /// </summary>
+        [Description("LOCCompletionStatusAbandoned")]
+        Abandoned = 5,
+        /// <summary>
+        /// Represents "On hold" completion status.
+        /// </summary>
+        [Description("LOCCompletionStatusOnHold")]
+        OnHold = 6,
+        /// <summary>
+        /// Represents "Plan to Play" completion status.
+        /// </summary>
+        [Description("LOCCompletionStatusPlanToPlay")]
+        PlanToPlay = 7
     }
 }

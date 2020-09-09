@@ -12,22 +12,8 @@ namespace Playnite.SDK.Models
     /// <summary>
     /// Represents emulator profile.
     /// </summary>
-    public class EmulatorProfile : DatabaseObject
-    {        
-        private string name;
-        /// <summary>
-        /// Gets or sets emulator profile name.
-        /// </summary>
-        public string Name
-        {
-            get => name;
-            set
-            {
-                name = value;
-                OnPropertyChanged();
-            }
-        }
-
+    public class EmulatorProfile : DatabaseObject, IEquatable<EmulatorProfile>
+    {
         private List<Guid> platforms;
         /// <summary>
         /// Gets or sets platforms supported by profile.
@@ -41,7 +27,7 @@ namespace Playnite.SDK.Models
                 OnPropertyChanged();
             }
         }
-        
+
         private List<string> imageExtensions;
         /// <summary>
         /// Gets or sets file extension supported by profile.
@@ -99,7 +85,7 @@ namespace Playnite.SDK.Models
         }
 
         /// <summary>
-        /// 
+        ///
         /// </summary>
         /// <returns></returns>
         public override string ToString()
@@ -113,6 +99,47 @@ namespace Playnite.SDK.Models
         public EmulatorProfile() : base()
         {
         }
+
+        /// <inheritdoc/>
+        public bool Equals(EmulatorProfile other)
+        {
+            if (other is null)
+            {
+                return false;
+            }
+
+            if (!Platforms.IsListEqual(other.Platforms))
+            {
+                return false;
+            }
+
+            if (!ImageExtensions.IsListEqual(other.ImageExtensions))
+            {
+                return false;
+            }
+
+            if (!string.Equals(Executable, other.Executable, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (!string.Equals(Arguments, other.Arguments, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (!string.Equals(WorkingDirectory, other.WorkingDirectory, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (!string.Equals(Name, other.Name, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return true;
+        }
     }
 
     /// <summary>
@@ -120,20 +147,6 @@ namespace Playnite.SDK.Models
     /// </summary>
     public class Emulator : DatabaseObject
     {
-        private string name;
-        /// <summary>
-        /// Gets or sets emulator name.
-        /// </summary>
-        public string Name
-        {
-            get => name;
-            set
-            {
-                name = value;
-                OnPropertyChanged();
-            }
-        }
-
         private ObservableCollection<EmulatorProfile> profile;
         /// <summary>
         /// Gets or sets list of emulator profiles.
@@ -165,12 +178,30 @@ namespace Playnite.SDK.Models
         }
 
         /// <summary>
-        /// 
+        ///
         /// </summary>
         /// <returns></returns>
         public override string ToString()
         {
             return Name;
+        }
+
+        /// <inheritdoc/>
+        public override void CopyDiffTo(object target)
+        {
+            base.CopyDiffTo(target);
+
+            if (target is Emulator tro)
+            {
+                if (!Profiles.IsListEqualExact(tro.Profiles))
+                {
+                    tro.Profiles = Profiles;
+                }
+            }
+            else
+            {
+                throw new ArgumentException($"Target object has to be of type {GetType().Name}");
+            }
         }
     }
 }

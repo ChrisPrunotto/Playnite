@@ -22,13 +22,14 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <DebugType>none</DebugType>
+    <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
     <OutputPath>bin\Release\</OutputPath>
     <DefineConstants>TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <DebugSymbols>true</DebugSymbols>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Newtonsoft.Json, Version=10.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
@@ -55,35 +56,42 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="..\..\PlayniteUI\Commands\GeneralCommands.cs">
-      <Link>Commands\GeneralCommands.cs</Link>
-    </Compile>
-    <Compile Include="..\..\PlayniteUI\Commands\RelayCommand.cs">
-      <Link>Commands\RelayCommand.cs</Link>
-    </Compile>
-    <Compile Include="..\..\PlayniteUI\Converters\EnumConverter.cs">
-      <Link>Converters\EnumConverter.cs</Link>
-    </Compile>
-    <Compile Include="..\..\PlayniteUI\Converters\NegateConverter.cs">
-      <Link>Converters\NegateConverter.cs</Link>
-    </Compile>
     <Compile Include="..\..\Playnite\BaseGameController.cs">
       <Link>BaseGameController.cs</Link>
     </Compile>
+    <Compile Include="..\..\Playnite\Commands\GlobalCommands.cs">
+      <Link>Commands\GlobalCommands.cs</Link>
+    </Compile>
+    <Compile Include="..\..\Playnite\Converters\EnumToBooleanConverter.cs">
+      <Link>Converters\EnumToBooleanConverter.cs</Link>
+    </Compile>
+    <Compile Include="..\..\Playnite\Converters\InvertableBooleanToVisibilityConverter.cs">
+      <Link>Converters\InvertableBooleanToVisibilityConverter.cs</Link>
+    </Compile>
+    <Compile Include="..\..\Playnite\Converters\NegateConverter.cs">
+      <Link>Converters\NegateConverter.cs</Link>
+    </Compile>
+    <Compile Include="..\..\Playnite\Services\BaseServicesClient.cs">
+      <Link>Services\BaseServicesClient.cs</Link>
+    </Compile>
+    <Compile Include="..\..\Playnite\Services\GenericResponse.cs">
+      <Link>Services\GenericResponse.cs</Link>
+    </Compile>
     <Compile Include="Configuration.cs" />
-    <Compile Include="Converters\CompletionStatusToStringConverter.cs" />
+    <Compile Include="Converters\BackgroundSourceToStringConverter.cs" />
     <Compile Include="Environment.cs" />
     <Compile Include="GameExtension.cs" />
     <Compile Include="AppState.cs" />
     <Compile Include="Models\GetOwnedGamesResult.cs" />
     <Compile Include="Models\LocalSteamUser.cs" />
     <Compile Include="Models\ResolveVanityResult.cs" />
-    <Compile Include="Models\SteamGameMetadata.cs" />
-    <Compile Include="Models\StoreAppDetailsResult.cs" />
+    <Compile Include="SteamShared\SteamGameMetadata.cs" />
+    <Compile Include="SteamShared\StoreAppDetailsResult.cs" />
     <Compile Include="SteamClient.cs" />
     <Compile Include="Services\SteamServicesClient.cs" />
-    <Compile Include="Services\WebApiClient.cs" />
-    <Compile Include="Services\SteamApiClient.cs" />
+    <Compile Include="SteamShared\MetadataProvider.cs" />
+    <Compile Include="SteamShared\WebApiClient.cs" />
+    <Compile Include="SteamShared\SteamApiClient.cs" />
     <Compile Include="SteamGameController.cs" />
     <Compile Include="SteamLibrary.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
@@ -119,9 +127,6 @@
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="BuildCopyExclude.txt" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\steamicon.png">

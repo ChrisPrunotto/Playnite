@@ -54,35 +54,9 @@ namespace Playnite.SDK
         IResourceProvider Resources { get; }
 
         /// <summary>
-        /// Gets path dedicated for plugins to store data.
+        /// Gets URI handler API.
         /// </summary>
-        /// <param name="plugin">Source plugin.</param>
-        /// <returns>Full directory path.</returns>
-        string GetPluginUserDataPath(IPlugin plugin);
-
-        /// <summary>
-        /// Gets plugin configuration stored in plugin.cfg file.
-        /// </summary>
-        /// <typeparam name="TConfig">Plugin configuration type.</typeparam>
-        /// <param name="plugin">Source plugin.</param>
-        /// <returns>Plugin configuration.</returns>
-        TConfig GetPluginConfiguration<TConfig>(IPlugin plugin) where TConfig : class;
-
-        /// <summary>
-        /// Gets plugin settings.
-        /// </summary>
-        /// <typeparam name="TSettings">Plugin settings type.</typeparam>
-        /// <param name="plugin">Source plugin.</param>
-        /// <returns>Plugin settings.</returns>
-        TSettings LoadPluginSettings<TSettings>(IPlugin plugin) where TSettings : class;
-
-        /// <summary>
-        /// Saves plugin settings.
-        /// </summary>
-        /// <typeparam name="TSettings">Plugin settings type.</typeparam>
-        /// <param name="plugin"></param>
-        /// <param name="settings">Source plugin.</param>
-        void SavePluginSettings<TSettings>(IPlugin plugin, TSettings settings) where TSettings : class;
+        IUriHandlerAPI UriHandler { get; }
 
         /// <summary>
         /// Expands dynamic game variables in specified string.
@@ -112,5 +86,11 @@ namespace Playnite.SDK
         /// </summary>
         /// <returns>Logger object.</returns>
         ILogger CreateLogger();
+
+        /// <summary>
+        /// Starts game.
+        /// </summary>
+        /// <param name="gameId">Game's database ID.</param>
+        void StartGame(Guid gameId);
     }
 }

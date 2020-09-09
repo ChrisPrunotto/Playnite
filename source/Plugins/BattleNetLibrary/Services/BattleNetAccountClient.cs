@@ -1,7 +1,6 @@
 ﻿using BattleNetLibrary.Models;
 using Playnite.Common;
 using Playnite.SDK;
-using Playnite.Web;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -17,7 +16,7 @@ namespace BattleNetLibrary.Services
         private const string apiStatusUrl = @"https://account.blizzard.com/api/";
         private const string gamesUrl = @"https://account.blizzard.com/api/games-and-subs";
         private const string classicGamesUrl = @"https://account.blizzard.com/api/classic-games";
-        private ILogger logger = LogManager.GetLogger();
+        private static ILogger logger = LogManager.GetLogger();
         private IWebView webView;
 
         public BattleNetAccountClient(IWebView webView)
@@ -47,7 +46,7 @@ namespace BattleNetLibrary.Services
             webView.NavigationChanged += (s, e) =>
             {
                 var address = webView.GetCurrentAddress();
-                if (address.StartsWith(@"https://account.blizzard.com") && !address.Equals(apiUrls.logoutUri, StringComparison.OrdinalIgnoreCase))
+                if (address.Equals(@"https://account.blizzard.com/overview", StringComparison.OrdinalIgnoreCase))
                 {
                     webView.Close();
                 }
@@ -67,7 +66,7 @@ namespace BattleNetLibrary.Services
             using (var webClient = new WebClient())
             {
                 try
-                {                    
+                {
                     webClient.DownloadData(apiStatusUrl);
                 }
                 catch (WebException exception) // Response is always 401
@@ -92,6 +91,8 @@ namespace BattleNetLibrary.Services
 
         public BattleNetApiStatus GetApiStatus()
         {
+            // This refreshes authentication cookie
+            webView.NavigateAndWait("https://account.blizzard.com:443/oauth2/authorization/account-settings");
             webView.NavigateAndWait(apiStatusUrl);
             var textStatus = webView.GetPageText();
             return Serialization.FromJson<BattleNetApiStatus>(textStatus);

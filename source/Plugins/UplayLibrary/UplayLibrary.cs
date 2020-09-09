@@ -13,19 +13,16 @@ using System.Windows.Controls;
 
 namespace UplayLibrary
 {
-    public class UplayLibrary : ILibraryPlugin
+    public class UplayLibrary : LibraryPlugin
     {
         private ILogger logger = LogManager.GetLogger();
-        private readonly IPlayniteAPI playniteApi;
         private const string dbImportMessageId = "uplaylibImportError";
 
         internal UplayLibrarySettings LibrarySettings { get; private set; }
 
-        public UplayLibrary(IPlayniteAPI api)
+        public UplayLibrary(IPlayniteAPI api) : base(api)
         {
-            playniteApi = api;
-            LibraryIcon = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), @"Resources\uplayicon.png");
-            LibrarySettings = new UplayLibrarySettings(this, playniteApi);
+            LibrarySettings = new UplayLibrarySettings(this);
         }
 
         public GameAction GetGamePlayTask(string id)
@@ -38,37 +35,49 @@ namespace UplayLibrary
             };
         }
 
-        public List<Game> GetInstalledGames()
+        public List<GameInfo> GetLibraryGames()
         {
-            var games = new List<Game>();
-
-            var root = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry32);
-            var installsKey = root.OpenSubKey(@"SOFTWARE\ubisoft\Launcher\Installs\");
-            if (installsKey == null)
+            var games = new List<GameInfo>();
+            var dlcsToIgnore = new List<uint>();
+            foreach (var item in Uplay.GetLocalProductCache())
             {
-                root = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-                installsKey = root.OpenSubKey(@"SOFTWARE\ubisoft\Launcher\Installs\");
-
-                if (installsKey == null)
+                if (item.root.addons.HasItems())
                 {
-                    return games;
+                    foreach (var dlc in item.root.addons.Select(a => a.id))
+                    {
+                        dlcsToIgnore.AddMissing(dlc);
+                    }
                 }
-            }
 
-            foreach (var install in installsKey.GetSubKeyNames())
-            {
-                var gameData = installsKey.OpenSubKey(install);
-                var installDir = (gameData.GetValue("InstallDir") as string).Replace('/', Path.DirectorySeparatorChar);
-
-                var newGame = new Game()
+                if (item.root.third_party_platform != null)
                 {
-                    GameId = install,
-                    PluginId = Id,
-                    Source = "Uplay",
-                    InstallDirectory = installDir,
-                    PlayAction = GetGamePlayTask(install),
-                    Name = Path.GetFileName(installDir.TrimEnd(Path.DirectorySeparatorChar)),
-                    IsInstalled = true
+                    continue;
+                }
+
+                if (item.root.is_ulc)
+                {
+                    dlcsToIgnore.AddMissing(item.uplay_id);
+                    continue;
+                }
+
+                if (dlcsToIgnore.Contains(item.uplay_id))
+                {
+                    continue;
+                }
+
+                if (item.root.start_game == null)
+                {
+                    continue;
+                }
+
+                var newGame = new GameInfo
+                {
+                    Name = item.root.name,
+                    GameId = item.uplay_id.ToString(),
+                    BackgroundImage = item.root.background_image,
+                    Icon = item.root.icon_image,
+                    CoverImage = item.root.thumb_image,
+                    Source = "Uplay"
                 };
 
                 games.Add(newGame);
@@ -77,65 +86,141 @@ namespace UplayLibrary
             return games;
         }
 
+        public List<GameInfo> GetInstalledGames()
+        {
+            var games = new List<GameInfo>();
+
+            var root = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry32);
+            var installsKey = root.OpenSubKey(@"SOFTWARE\ubisoft\Launcher\Installs\");
+            if (installsKey == null)
+            {
+                root = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+                installsKey = root.OpenSubKey(@"SOFTWARE\ubisoft\Launcher\Installs\");
+            }
+
+            if (installsKey != null)
+            {
+                foreach (var install in installsKey.GetSubKeyNames())
+                {
+                    var gameData = installsKey.OpenSubKey(install);
+                    var installDir = (gameData.GetValue("InstallDir") as string)?.Replace('/', Path.DirectorySeparatorChar);
+                    if (!installDir.IsNullOrEmpty() && Directory.Exists(installDir))
+                    {
+                        var newGame = new GameInfo()
+                        {
+                            GameId = install,
+                            Source = "Uplay",
+                            InstallDirectory = installDir,
+                            PlayAction = GetGamePlayTask(install),
+                            Name = Path.GetFileName(installDir.TrimEnd(Path.DirectorySeparatorChar)),
+                            IsInstalled = true
+                        };
+
+                        games.Add(newGame);
+                    }
+                }
+            }
+
+            return games;
+        }
+
         #region ILibraryPlugin
 
-        public ILibraryClient Client { get; } = new UplayClient();
+        public override LibraryClient Client => new UplayClient();
 
-        public string LibraryIcon { get; }
+        public override string LibraryIcon => Uplay.Icon;
 
-        public string Name { get; } = "Uplay";
+        public override string Name => "Uplay";
 
-        public Guid Id { get; } = Guid.Parse("C2F038E5-8B92-4877-91F1-DA9094155FC5");
+        public override Guid Id => Guid.Parse("C2F038E5-8B92-4877-91F1-DA9094155FC5");
 
-        public bool IsClientInstalled => Uplay.IsInstalled;
-
-        public void Dispose()
+        public override LibraryPluginCapabilities Capabilities { get; } = new LibraryPluginCapabilities
         {
+            CanShutdownClient = true
+        };
 
+        public override ISettings GetSettings(bool firstRunSettings)
+        {
+            return LibrarySettings;
         }
 
-        public ISettings GetSettings(bool firstRunSettings)
+        public override UserControl GetSettingsView(bool firstRunView)
         {
-            return firstRunSettings ? null : LibrarySettings;
+            return new UplayLibrarySettingsView();
         }
 
-        public UserControl GetSettingsView(bool firstRunView)
-        {
-            return firstRunView ? null : new UplayLibrarySettingsView();
-        }
-
-        public IGameController GetGameController(Game game)
+        public override IGameController GetGameController(Game game)
         {
             return new UplayGameController(this, game);
         }
 
-        public IEnumerable<Game> GetGames()
+        public override IEnumerable<GameInfo> GetGames()
         {
-            var allGames = new List<Game>();
+            var allGames = new List<GameInfo>();
+            var installedGames = new List<GameInfo>();
+            Exception importError = null;
+
             if (LibrarySettings.ImportInstalledGames)
             {
                 try
                 {
-                    var installed = GetInstalledGames();
-                    logger.Debug($"Found {installed.Count} installed Uplay games.");
-                    playniteApi.Notifications.Remove(dbImportMessageId);
-                    return installed;
+                    installedGames = GetInstalledGames();
+                    logger.Debug($"Found {installedGames.Count} installed Uplay games.");
+                    allGames.AddRange(installedGames);
+                }
+                catch (Exception e)
+                {
+                    logger.Error(e, "Failed to import installed Uplay games.");
+                    importError = e;
+                }
+            }
+
+            if (LibrarySettings.ImportUninstalledGames)
+            {
+                try
+                {
+                    var libraryGames = GetLibraryGames();
+                    logger.Debug($"Found {libraryGames.Count} library Uplay games.");
+                    foreach (var libGame in libraryGames)
+                    {
+                        var installed = installedGames.FirstOrDefault(a => a.GameId == libGame.GameId);
+                        if (installed != null)
+                        {
+                            installed.Icon = libGame.Icon;
+                            installed.BackgroundImage = libGame.BackgroundImage;
+                            installed.CoverImage = libGame.CoverImage;
+                        }
+                        else
+                        {
+                            allGames.Add(libGame);
+                        }
+                    }
                 }
                 catch (Exception e)
                 {
                     logger.Error(e, "Failed to import uninstalled Uplay games.");
-                    playniteApi.Notifications.Add(
-                        dbImportMessageId,
-                        string.Format(playniteApi.Resources.FindString("LOCLibraryImportError"), Name) +
-                        System.Environment.NewLine + e.Message,
-                        NotificationType.Error);
+                    importError = e;
                 }
+            }
+
+            if (importError != null)
+            {
+                PlayniteApi.Notifications.Add(new NotificationMessage(
+                    dbImportMessageId,
+                    string.Format(PlayniteApi.Resources.GetString("LOCLibraryImportError"), Name) +
+                    System.Environment.NewLine + importError.Message,
+                    NotificationType.Error,
+                    () => OpenSettingsView()));
+            }
+            else
+            {
+                PlayniteApi.Notifications.Remove(dbImportMessageId);
             }
 
             return allGames;
         }
 
-        public ILibraryMetadataProvider GetMetadataDownloader()
+        public override LibraryMetadataProvider GetMetadataDownloader()
         {
             return new UplayMetadataProvider();
         }

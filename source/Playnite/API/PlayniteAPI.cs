@@ -3,6 +3,7 @@ using Playnite.SDK;
 using Playnite.SDK.Models;
 using Playnite.SDK.Plugins;
 using Playnite.Settings;
+using Playnite.Common;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -16,9 +17,7 @@ namespace Playnite.API
 {
     public class PlayniteAPI : IPlayniteAPI
     {
-        private static ILogger logger = LogManager.GetLogger();
-
-        private const string pluginSettingFileName = "config.json";
+        private readonly GamesEditor gameEditor;
 
         public PlayniteAPI(            
             IGameDatabaseAPI databaseApi,
@@ -28,7 +27,9 @@ namespace Playnite.API
             IPlaynitePathsAPI pathsApi,
             IWebViewFactory webViewFactory,
             IResourceProvider resources,
-            INotificationsAPI notifications)
+            INotificationsAPI notifications,
+            GamesEditor gameEditor,
+            IUriHandlerAPI uriHandler)
         {
             WebViews = webViewFactory;
             Paths = pathsApi;
@@ -38,6 +39,8 @@ namespace Playnite.API
             Database = databaseApi;
             Resources = resources;
             Notifications = notifications;
+            this.gameEditor = gameEditor;
+            UriHandler = uriHandler;
         }
 
         public IDialogsFactory Dialogs { get; }
@@ -55,6 +58,8 @@ namespace Playnite.API
         public IResourceProvider Resources { get; }
 
         public INotificationsAPI Notifications { get; }
+
+        public IUriHandlerAPI UriHandler { get; }
 
         public string ExpandGameVariables(Game game, string inputString)
         {
@@ -77,56 +82,17 @@ namespace Playnite.API
             return CreateLogger(className);
         }
 
-        public string GetPluginUserDataPath(IPlugin plugin)
+        public void StartGame(Guid gameId)
         {
-            var path = Path.Combine(PlaynitePaths.ExtensionsDataPath, plugin.Id.ToString());
-            FileSystem.CreateDirectory(path);
-            return path;
-        }
-
-        public TConfig GetPluginConfiguration<TConfig>(IPlugin plugin) where TConfig : class
-        {
-            var pluginDir = Path.GetDirectoryName(plugin.GetType().Assembly.Location);
-            var pluginConfig = Path.Combine(pluginDir, "plugin.cfg");
-            if (File.Exists(pluginConfig))
+            var game = Database.Games.Get(gameId);
+            if (game == null)
             {
-                try
-                {
-                    return JsonConvert.DeserializeObject<TConfig>(File.ReadAllText(pluginConfig));
-                }
-                catch (Exception e) when (!PlayniteEnvironment.ThrowAllErrors)
-                {
-                    logger.Error(e, $"Failed to load plugin config: {pluginConfig}");
-                }
+                throw new Exception($"Can't start game, game ID {gameId} not found.");
             }
-
-            return null;
-        }
-
-        public TSettings LoadPluginSettings<TSettings>(IPlugin plugin) where TSettings : class
-        {
-            var setFile = Path.Combine(GetPluginUserDataPath(plugin), pluginSettingFileName);
-            if (!File.Exists(setFile))
+            else
             {
-                return null;
+                gameEditor.PlayGame(game);
             }
-
-            var strConf = File.ReadAllText(setFile);
-            return JsonConvert.DeserializeObject<TSettings>(strConf);
-
-        }
-
-        public void SavePluginSettings<TSettings>(IPlugin plugin, TSettings settings) where TSettings : class
-        {
-            var setDir = GetPluginUserDataPath(plugin);
-            var setFile = Path.Combine(setDir, pluginSettingFileName);
-            if (!Directory.Exists(setDir))
-            {
-                Directory.CreateDirectory(setDir);
-            }
-
-            var strConf = JsonConvert.SerializeObject(settings, Formatting.Indented);
-            File.WriteAllText(setFile, strConf);
         }
     }
 }

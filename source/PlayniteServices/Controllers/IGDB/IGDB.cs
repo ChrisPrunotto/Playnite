@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Playnite.SDK;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -9,6 +10,8 @@ namespace PlayniteServices.Controllers.IGDB
 {
     public class IGDB
     {
+        private static ILogger logger = LogManager.GetLogger();
+
         public static string UrlBase
         {
             get
@@ -62,12 +65,13 @@ namespace PlayniteServices.Controllers.IGDB
             get;
         } = new HttpClient();
 
-        private static HttpRequestMessage CreateRequest(string url, string apiKey)
+        private static HttpRequestMessage CreateRequest(string url, string query, string apiKey)
         {
             var request = new HttpRequestMessage()
             {
                 RequestUri = new Uri(UrlBase + url),
-                Method = HttpMethod.Get
+                Method = HttpMethod.Get,
+                Content = new StringContent(query)
             };
 
             request.Headers.Add("user-key", apiKey);
@@ -75,9 +79,10 @@ namespace PlayniteServices.Controllers.IGDB
             return request;
         }
 
-        public static async Task<string> SendStringRequest(string url)
+        public static async Task<string> SendStringRequest(string url, string query)
         {
-            var sharedRequest = CreateRequest(url, ApiKey);
+            logger.Debug($"IGDB Live: {url}, {query}");
+            var sharedRequest = CreateRequest(url, query, ApiKey);
             var sharedResponse = await HttpClient.SendAsync(sharedRequest);
             return await sharedResponse.Content.ReadAsStringAsync();
         }
@@ -90,8 +95,8 @@ namespace PlayniteServices.Controllers.IGDB
                 Method = HttpMethod.Get
             };
 
-            var response = await HttpClient.SendAsync(request);           
-            return await response.Content.ReadAsStringAsync();           
+            var response = await HttpClient.SendAsync(request);
+            return await response.Content.ReadAsStringAsync();
         }
     }
 }

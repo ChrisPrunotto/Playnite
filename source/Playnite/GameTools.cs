@@ -9,11 +9,21 @@ using System.Threading.Tasks;
 
 namespace Playnite
 {
+    public class MultiEditGame : Game
+    {
+        public List<Guid> DistinctGenreIds { get; set; }
+        public List<Guid> DistinctDeveloperIds { get; set; }
+        public List<Guid> DistinctPublisherIds { get; set; }
+        public List<Guid> DistinctCategoryIds { get; set; }
+        public List<Guid> DistinctTagIds { get; set; }
+        public List<Guid> DistinctFeatureIds { get; set; }
+    }
+
     public class GameTools
     {
-        public static Game GetMultiGameEditObject(IEnumerable<Game> games)
+        public static MultiEditGame GetMultiGameEditObject(IEnumerable<Game> games)
         {
-            var dummyGame = new Game();
+            var dummyGame = new MultiEditGame();
             if (games?.Any() != true)
             {
                 return dummyGame;
@@ -33,40 +43,28 @@ namespace Playnite
                 dummyGame.SortingName = firstSortingName;
             }
 
-            var firstGenres = firstGame.Genres;
-            if (games.All(a => a.Genres.IsListEqual(firstGenres) == true))
-            {
-                dummyGame.Genres = firstGenres;
-            }
+            dummyGame.GenreIds = ListExtensions.GetCommonItems(games.Select(a => a.GenreIds)).ToList();
+            dummyGame.DistinctGenreIds = ListExtensions.GetDistinctItems(games.Select(a => a.GenreIds)).ToList();
+
+            dummyGame.DeveloperIds = ListExtensions.GetCommonItems(games.Select(a => a.DeveloperIds)).ToList();
+            dummyGame.DistinctDeveloperIds = ListExtensions.GetDistinctItems(games.Select(a => a.DeveloperIds)).ToList();
+
+            dummyGame.PublisherIds = ListExtensions.GetCommonItems(games.Select(a => a.PublisherIds)).ToList();
+            dummyGame.DistinctPublisherIds = ListExtensions.GetDistinctItems(games.Select(a => a.PublisherIds)).ToList();
+
+            dummyGame.CategoryIds = ListExtensions.GetCommonItems(games.Select(a => a.CategoryIds)).ToList();
+            dummyGame.DistinctCategoryIds = ListExtensions.GetDistinctItems(games.Select(a => a.CategoryIds)).ToList();
+
+            dummyGame.TagIds = ListExtensions.GetCommonItems(games.Select(a => a.TagIds)).ToList();
+            dummyGame.DistinctTagIds = ListExtensions.GetDistinctItems(games.Select(a => a.TagIds)).ToList();
+
+            dummyGame.FeatureIds = ListExtensions.GetCommonItems(games.Select(a => a.FeatureIds)).ToList();
+            dummyGame.DistinctFeatureIds = ListExtensions.GetDistinctItems(games.Select(a => a.FeatureIds)).ToList();
 
             var firstReleaseDate = firstGame.ReleaseDate;
             if (games.All(a => a.ReleaseDate == firstReleaseDate) == true)
             {
                 dummyGame.ReleaseDate = firstReleaseDate;
-            }
-
-            var firstDeveloper = firstGame.Developers;
-            if (games.All(a => a.Developers.IsListEqual(firstDeveloper) == true))
-            {
-                dummyGame.Developers = firstDeveloper;
-            }
-
-            var firstPublisher = firstGame.Publishers;
-            if (games.All(a => a.Publishers.IsListEqual(firstPublisher) == true))
-            {
-                dummyGame.Publishers = firstPublisher;
-            }
-
-            var firstCat = firstGame.Categories;
-            if (games.All(a => a.Categories.IsListEqual(firstCat) == true))
-            {
-                dummyGame.Categories = firstCat;
-            }
-
-            var firstTag = firstGame.Tags;
-            if (games.All(a => a.Tags.IsListEqual(firstTag) == true))
-            {
-                dummyGame.Tags = firstTag;
             }
 
             var firstDescription = firstGame.Description;
@@ -105,10 +103,10 @@ namespace Playnite
                 dummyGame.PlayCount = firstPlayCount;
             }
 
-            var firstSeries = firstGame.Series;
-            if (games.All(a => a.Series == firstSeries) == true)
+            var firstSeries = firstGame.SeriesId;
+            if (games.All(a => a.SeriesId == firstSeries) == true)
             {
-                dummyGame.Series = firstSeries;
+                dummyGame.SeriesId = firstSeries;
             }
 
             var firstVersion = firstGame.Version;
@@ -117,22 +115,22 @@ namespace Playnite
                 dummyGame.Version = firstVersion;
             }
 
-            var firstAgeRating = firstGame.AgeRating;
-            if (games.All(a => a.AgeRating == firstAgeRating) == true)
+            var firstAgeRating = firstGame.AgeRatingId;
+            if (games.All(a => a.AgeRatingId == firstAgeRating) == true)
             {
-                dummyGame.AgeRating = firstAgeRating;
+                dummyGame.AgeRatingId = firstAgeRating;
             }
 
-            var firstRegion = firstGame.Region;
-            if (games.All(a => a.Region == firstRegion) == true)
+            var firstRegion = firstGame.RegionId;
+            if (games.All(a => a.RegionId == firstRegion) == true)
             {
-                dummyGame.Region = firstRegion;
+                dummyGame.RegionId = firstRegion;
             }
 
-            var firstSource = firstGame.Source;
-            if (games.All(a => a.Source == firstSource) == true)
+            var firstSource = firstGame.SourceId;
+            if (games.All(a => a.SourceId == firstSource) == true)
             {
-                dummyGame.Source = firstSource;
+                dummyGame.SourceId = firstSource;
             }
 
             var firstCompletionStatus = firstGame.CompletionStatus;
@@ -169,6 +167,24 @@ namespace Playnite
             if (games.All(a => a.Favorite == firstFavorite) == true)
             {
                 dummyGame.Favorite = firstFavorite;
+            }
+
+            var firstScriptLanuage = firstGame.ActionsScriptLanguage;
+            if (games.All(a => a.ActionsScriptLanguage == firstScriptLanuage) == true)
+            {
+                dummyGame.ActionsScriptLanguage = firstScriptLanuage;
+            }
+
+            var firstPreScript = firstGame.PreScript;
+            if (games.All(a => string.Equals(a.PreScript, firstPreScript)))
+            {
+                dummyGame.PreScript = firstPreScript;
+            }
+
+            var firstPostScript = firstGame.PostScript;
+            if (games.All(a => string.Equals(a.PostScript, firstPostScript)))
+            {
+                dummyGame.PostScript = firstPostScript;
             }
 
             return dummyGame;

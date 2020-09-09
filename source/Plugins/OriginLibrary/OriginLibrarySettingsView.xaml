@@ -4,11 +4,11 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              xmlns:local="clr-namespace:OriginLibrary"
-             xmlns:pui="clr-namespace:PlayniteUI"
+             xmlns:pcon="clr-namespace:Playnite.Converters"
              xmlns:sys="clr-namespace:System;assembly=mscorlib"
              mc:Ignorable="d" 
              d:DesignHeight="250" d:DesignWidth="800">
-    
+
     <d:DesignerProperties.DesignStyle>
         <Style TargetType="UserControl">
             <Setter Property="Background" Value="White" />
@@ -16,25 +16,32 @@
     </d:DesignerProperties.DesignStyle>
 
     <UserControl.Resources>
-        <pui:NegateConverter x:Key="NegateConverter" />
+        <pcon:NegateConverter x:Key="NegateConverter" />
         <sys:Boolean x:Key="True">True</sys:Boolean>
         <sys:Boolean x:Key="False">False</sys:Boolean>
     </UserControl.Resources>
 
-    <StackPanel>
+    <StackPanel Margin="20">
         <CheckBox DockPanel.Dock="Top" Name="CheckOriginImportInstalled"
                   Margin="0,0,0,15"
                   IsChecked="{Binding ImportInstalledGames}"
                   Content="{DynamicResource LOCSettingsImportInstalledLabel}"/>
 
-        <CheckBox DockPanel.Dock="Top" Name="CheckOriginImportUninstalled"
-                  IsChecked="{Binding ImportUninstalledGames}"
-                  Content="{DynamicResource LOCSettingsImportUninstalledLabel}"/>
+        <CheckBox DockPanel.Dock="Top" Name="CheckOriginConnectAccount"
+                  IsChecked="{Binding ConnectAccount}"
+                  Content="{DynamicResource LOCSettingsConnectAccount}"/>
 
-        <StackPanel DockPanel.Dock="Top" Margin="40,5,5,5"
-                    IsEnabled="{Binding IsChecked, ElementName=CheckOriginImportUninstalled}">
-            <StackPanel Orientation="Horizontal">
-                <Button Content="{DynamicResource LOCAuthenticateLabel}" HorizontalAlignment="Left" Margin="5"
+        <StackPanel DockPanel.Dock="Top" Margin="40,5,5,0"
+                    IsEnabled="{Binding IsChecked, ElementName=CheckOriginConnectAccount}">
+
+            <CheckBox DockPanel.Dock="Top" Name="CheckOriginImportUninstalled"
+                      IsChecked="{Binding ImportUninstalledGames}"
+                      Margin="0,10,0,0"
+                      Content="{DynamicResource LOCSettingsImportUninstalledLabel}"/>
+
+            <StackPanel Orientation="Horizontal"
+                        DockPanel.Dock="Top" Margin="0,15,5,0" HorizontalAlignment="Left">
+                <Button Content="{DynamicResource LOCAuthenticateLabel}" HorizontalAlignment="Left"
                         Command="{Binding LoginCommand}"/>
                 <TextBlock VerticalAlignment="Center" Margin="10,5,5,5">
                     <TextBlock.Tag>

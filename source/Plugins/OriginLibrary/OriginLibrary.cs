@@ -3,6 +3,7 @@ using Newtonsoft.Json;
 using OriginLibrary.Models;
 using OriginLibrary.Services;
 using Playnite;
+using Playnite.Common;
 using Playnite.SDK;
 using Playnite.SDK.Models;
 using Playnite.SDK.Plugins;
@@ -17,37 +18,55 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
 using System.Windows.Controls;
+using System.Xml;
 using System.Xml.Linq;
+using System.Xml.Serialization;
 
 namespace OriginLibrary
 {
-    public class OriginLibrary : ILibraryPlugin
+    public class OriginLibrary : LibraryPlugin
     {
-        private ILogger logger = LogManager.GetLogger();
-        private readonly IPlayniteAPI playniteApi;
+        public class PlatformPath
+        {
+            public string CompletePath { get; set; }
+            public string Root { get; set; }
+            public string Path { get; set; }
+
+            public PlatformPath(string completePath)
+            {
+                CompletePath = completePath;
+            }
+
+            public PlatformPath(string root, string path)
+            {
+                Root = root;
+                Path = path;
+                CompletePath = System.IO.Path.Combine(root, path);
+            }
+        }
+
+        private readonly static ILogger logger = LogManager.GetLogger();
         private const string dbImportMessageId = "originlibImportError";
 
         internal OriginLibrarySettings LibrarySettings { get; private set; }
 
-        public OriginLibrary(IPlayniteAPI api)
+        public OriginLibrary(IPlayniteAPI api) : base(api)
         {
-            playniteApi = api;
-            LibraryIcon = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), @"Resources\originicon.png");
-            LibrarySettings = new OriginLibrarySettings(this, playniteApi);
+            LibrarySettings = new OriginLibrarySettings(this, PlayniteApi);
         }
 
-        internal string GetPathFromPlatformPath(string path, RegistryView platformView)
+        internal PlatformPath GetPathFromPlatformPath(string path, RegistryView platformView)
         {
             if (!path.StartsWith("["))
             {
-                return path;
+                return new PlatformPath(path);
             }
 
             var matchPath = Regex.Match(path, @"\[(.*?)\\(.*)\\(.*)\](.*)");
             if (!matchPath.Success)
             {
-                logger.Warn("Uknown path format " + path);
-                return string.Empty;
+                logger.Warn("Unknown path format " + path);
+                return null;
             }
 
             var root = matchPath.Groups[1].Value;
@@ -64,7 +83,7 @@ namespace OriginLibrary
                     break;
 
                 default:
-                    throw new Exception("Unknown registr root entry " + root);
+                    throw new Exception("Unknown registry root entry " + root);
             }
 
             var subPath = matchPath.Groups[2].Value.Trim(Path.DirectorySeparatorChar);
@@ -73,23 +92,22 @@ namespace OriginLibrary
             var subKey = rootKey.OpenSubKey(subPath);
             if (subKey == null)
             {
-                return string.Empty;
+                return null;
             }
 
             var keyValue = rootKey.OpenSubKey(subPath).GetValue(key);
             if (keyValue == null)
             {
-                return string.Empty;
+                return null;
             }
 
-            return Path.Combine(keyValue.ToString(), executable);
+            return new PlatformPath(keyValue.ToString(), executable);
         }
 
-        internal string GetPathFromPlatformPath(string path)
+        internal PlatformPath GetPathFromPlatformPath(string path)
         {
             var resultPath = GetPathFromPlatformPath(path, RegistryView.Registry64);
-
-            if (string.IsNullOrEmpty(resultPath))
+            if (resultPath == null)
             {
                 resultPath = GetPathFromPlatformPath(path, RegistryView.Registry32);
             }
@@ -104,48 +122,104 @@ namespace OriginLibrary
             return HttpUtility.ParseQueryString(data);
         }
 
-        internal GameLocalDataResponse GetLocalManifest(string id, string packageName = null, bool useDataCache = false)
+        internal static GameInstallerData GetGameInstallerData(string dataPath)
         {
-            var package = packageName;
-            var cachePath = Origin.GetCachePath(playniteApi.GetPluginUserDataPath(this));
-
-            if (string.IsNullOrEmpty(package))
+            try
             {
-                package = id.Replace(":", "");
-            }
-
-            var cacheFile = Path.Combine(cachePath, Path.GetFileNameWithoutExtension(package) + ".json");
-            if (useDataCache == true && File.Exists(cacheFile))
-            {
-                return JsonConvert.DeserializeObject<GameLocalDataResponse>(File.ReadAllText(cacheFile, Encoding.UTF8));
-            }
-            else if (useDataCache == true && !File.Exists(cacheFile))
-            {
-                logger.Debug($"Downloading game manifest {id}");
-                FileSystem.CreateDirectory(cachePath);
-
-                try
+                if (File.Exists(dataPath))
                 {
-                    var data = OriginApiClient.GetGameLocalData(id);
-                    File.WriteAllText(cacheFile, JsonConvert.SerializeObject(data), Encoding.UTF8);
-                    return data;
+                    var ser = new XmlSerializer(typeof(GameInstallerData));
+                    return (GameInstallerData)ser.Deserialize(XmlReader.Create(dataPath));
                 }
-                catch (WebException exc) when ((exc.Response as HttpWebResponse)?.StatusCode == HttpStatusCode.NotFound)
+                else
                 {
-                    logger.Info($"Origin manifest {id} not found on EA server, generating fake manifest.");
-                    var data = new GameLocalDataResponse()
+                    var rootDir = dataPath;
+                    for (int i = 0; i < 4; i++)
                     {
-                        offerId = id,
-                        offerType = "Doesn't exists"
-                    };
+                        var target = Path.Combine(rootDir, "__Installer");
+                        if (Directory.Exists(target))
+                        {
+                            rootDir = target;
+                            break;
+                        }
+                        else
+                        {
+                            rootDir = Path.Combine(rootDir, "..");
+                        }
+                    }
 
-                    File.WriteAllText(cacheFile, JsonConvert.SerializeObject(data), Encoding.UTF8);
-                    return data;
+                    var instPath = Path.Combine(rootDir, "installerdata.xml");
+                    if (File.Exists(instPath))
+                    {
+                        var ser = new XmlSerializer(typeof(GameInstallerData));
+                        return (GameInstallerData)ser.Deserialize(XmlReader.Create(instPath));
+                    }
                 }
+            }
+            catch (Exception e)
+            {
+                logger.Error(e, $"Failed to deserialize game installer xml {dataPath}.");
+            }
+
+            return null;
+        }
+
+        internal GameLocalDataResponse GetLocalManifest(string id)
+        {
+            try
+            {
+                return OriginApiClient.GetGameLocalData(id);
+            }
+            catch (WebException exc) when ((exc.Response as HttpWebResponse)?.StatusCode == HttpStatusCode.NotFound)
+            {
+                logger.Info($"Origin manifest {id} not found on EA server, generating fake manifest.");
+                return new GameLocalDataResponse
+                {
+                    offerId = id,
+                    offerType = "Doesn't exist"
+                };
+            }
+        }
+
+        public GameAction GetGamePlayTask(string installerDataPath)
+        {
+            var data = GetGameInstallerData(installerDataPath);
+            if (data == null)
+            {
+                return null;
             }
             else
             {
-                return OriginApiClient.GetGameLocalData(id);
+                var paths = GetPathFromPlatformPath(data.runtime.launchers.Last().filePath);
+                if (paths.CompletePath.Contains(@"://"))
+                {
+                    return new GameAction
+                    {
+                        Type = GameActionType.URL,
+                        Path = paths.CompletePath,
+                        IsHandledByPlugin = true
+                    };
+                }
+                else
+                {
+                    var action = new GameAction
+                    {
+                        Type = GameActionType.File,
+                        IsHandledByPlugin = true
+                    };
+                    if (paths.Path.IsNullOrEmpty())
+                    {
+                        action.Path = paths.CompletePath;
+                        action.WorkingDir = Path.GetDirectoryName(paths.CompletePath);
+                    }
+                    else
+                    {
+                        action.Path = paths.CompletePath;
+                        action.WorkingDir = paths.Root;
+                    }
+
+                    return action;
+                }
             }
         }
 
@@ -154,7 +228,7 @@ namespace OriginLibrary
             var platform = manifest.publishing.softwareList.software.FirstOrDefault(a => a.softwarePlatform == "PCWIN");
             var playAction = new GameAction()
             {
-                IsHandledByPlugin = true                
+                IsHandledByPlugin = true
             };
 
             if (string.IsNullOrEmpty(platform.fulfillmentAttributes.executePathOverride))
@@ -170,33 +244,27 @@ namespace OriginLibrary
             else
             {
                 var executePath = GetPathFromPlatformPath(platform.fulfillmentAttributes.executePathOverride);
-                if (executePath.EndsWith("installerdata.xml", StringComparison.OrdinalIgnoreCase))
+                if (executePath != null)
                 {
-                    var doc = XDocument.Load(executePath);
-                    var root = XElement.Parse(doc.ToString());
-                    var elem = root.Element("runtime")?.Element("launcher")?.Element("filePath");
-                    var path = elem?.Value;
-                    if (path != null)
+                    if (executePath.CompletePath.EndsWith("installerdata.xml", StringComparison.OrdinalIgnoreCase))
                     {
-                        executePath = GetPathFromPlatformPath(path);
-                        playAction.WorkingDir = Path.GetDirectoryName(executePath);
-                        playAction.Path = executePath;
+                        return GetGamePlayTask(executePath.CompletePath);
                     }
-                }
-                else
-                {
-                    playAction.WorkingDir = Path.GetDirectoryName(GetPathFromPlatformPath(platform.fulfillmentAttributes.installCheckOverride));
-                    playAction.Path = executePath;
+                    else
+                    {
+                        playAction.WorkingDir = executePath.Root;
+                        playAction.Path = executePath.CompletePath;
+                    }
                 }
             }
 
             return playAction;
         }
 
-        public Dictionary<string, Game> GetInstalledGames(bool useDataCache = false)
+        public Dictionary<string, GameInfo> GetInstalledGames()
         {
             var contentPath = Path.Combine(Origin.DataPath, "LocalContent");
-            var games = new Dictionary<string, Game>();
+            var games = new Dictionary<string, GameInfo>();
 
             if (Directory.Exists(contentPath))
             {
@@ -220,9 +288,8 @@ namespace OriginLibrary
                             gameId = match.Groups[1].Value + ":" + match.Groups[2].Value;
                         }
 
-                        var newGame = new Game()
-                        {                     
-                            PluginId = Id,
+                        var newGame = new GameInfo()
+                        {
                             Source = "Origin",
                             GameId = gameId,
                             IsInstalled = true
@@ -232,11 +299,16 @@ namespace OriginLibrary
 
                         try
                         {
-                            localData = GetLocalManifest(gameId, package, useDataCache);
+                            localData = GetLocalManifest(gameId);
                         }
                         catch (Exception e) when (!Environment.IsDebugBuild)
                         {
                             logger.Error(e, $"Failed to get Origin manifest for a {gameId}, {package}");
+                            continue;
+                        }
+
+                        if (localData == null)
+                        {
                             continue;
                         }
 
@@ -255,33 +327,47 @@ namespace OriginLibrary
                         }
 
                         var installPath = GetPathFromPlatformPath(platform.fulfillmentAttributes.installCheckOverride);
-                        if (string.IsNullOrEmpty(installPath) || !File.Exists(installPath))
+                        if (installPath == null ||
+                            installPath.CompletePath.IsNullOrEmpty() ||
+                            !File.Exists(installPath.CompletePath))
                         {
                             continue;
                         }
 
+                        var installDirReplacement = ExpandableVariables.InstallationDirectory + Path.DirectorySeparatorChar;
                         newGame.PlayAction = GetGamePlayTask(localData);
                         if (newGame.PlayAction?.Type == GameActionType.File)
                         {
                             newGame.InstallDirectory = newGame.PlayAction.WorkingDir;
-                            newGame.PlayAction.WorkingDir = newGame.PlayAction.WorkingDir.Replace(newGame.InstallDirectory, ExpandableVariables.InstallationDirectory);
-                            newGame.PlayAction.Path = newGame.PlayAction.Path.Replace(newGame.InstallDirectory, "").Trim(new char[] { '\\', '/' });
+                            newGame.PlayAction.Path = newGame.PlayAction.Path.Replace(newGame.InstallDirectory, installDirReplacement);
                         }
                         else
                         {
-                            newGame.InstallDirectory = Path.GetDirectoryName(installPath);
+                            newGame.InstallDirectory = Path.GetDirectoryName(installPath.CompletePath);
+                        }
+
+                        // For games like Sims 4
+                        if (newGame.PlayAction?.Path.EndsWith("exe", StringComparison.OrdinalIgnoreCase) == false)
+                        {
+                            var task = GetGamePlayTask(newGame.InstallDirectory);
+                            newGame.InstallDirectory = task.WorkingDir;
+                            newGame.PlayAction.Path = task.Path.Replace(newGame.InstallDirectory, installDirReplacement);
                         }
 
                         // If game uses EasyAntiCheat then use executable referenced by it
-                        if (Origin.GetGameUsesEasyAntiCheat(newGame))
+                        if (Origin.GetGameUsesEasyAntiCheat(newGame.InstallDirectory))
                         {
                             var eac = EasyAntiCheat.GetLauncherSettings(newGame.InstallDirectory);
                             if (newGame.PlayAction == null)
                             {
-                                newGame.PlayAction = new GameAction { Type = GameActionType.File };
+                                newGame.PlayAction = new GameAction
+                                {
+                                    Type = GameActionType.File,
+                                    IsHandledByPlugin = true
+                                };
                             }
 
-                            newGame.PlayAction.Path = eac.Executable;
+                            newGame.PlayAction.Path = eac.Executable.Replace(newGame.InstallDirectory, installDirReplacement);
                             if (!string.IsNullOrEmpty(eac.Parameters) && eac.UseCmdlineParameters == "1")
                             {
                                 newGame.PlayAction.Arguments = eac.Parameters;
@@ -291,13 +377,23 @@ namespace OriginLibrary
                             {
                                 newGame.PlayAction.WorkingDir = Path.Combine(ExpandableVariables.InstallationDirectory, eac.WorkingDirectory);
                             }
-                            else
-                            {
-                                newGame.PlayAction.WorkingDir = ExpandableVariables.InstallationDirectory;
-                            }
                         }
 
-                        games.Add(newGame.GameId, newGame);
+                        if (newGame.PlayAction != null)
+                        {
+                            if (!newGame.PlayAction.Path.Contains(ExpandableVariables.InstallationDirectory))
+                            {
+                                newGame.PlayAction.Path = installDirReplacement + newGame.PlayAction.Path;
+                            }
+
+                            newGame.PlayAction.WorkingDir = null;
+                            games.Add(newGame.GameId, newGame);
+                        }
+                        else
+                        {
+                            logger.Warn("Found installed Origin game that's not launchable, skipping import.");
+                            logger.Warn(newGame.ToString());
+                        }
                     }
                     catch (Exception e) when (!Environment.IsDebugBuild)
                     {
@@ -309,9 +405,9 @@ namespace OriginLibrary
             return games;
         }
 
-        public List<Game> GetLibraryGames()
+        public List<GameInfo> GetLibraryGames()
         {
-            using (var view = playniteApi.WebViews.CreateOffscreenView())
+            using (var view = PlayniteApi.WebViews.CreateOffscreenView())
             {
                 var api = new OriginAccountClient(view);
 
@@ -337,16 +433,42 @@ namespace OriginLibrary
                     throw new Exception("Access error: " + info.error);
                 }
 
-                var games = new List<Game>();
+                var games = new List<GameInfo>();
 
                 foreach (var game in api.GetOwnedGames(info.pid.pidId, token).Where(a => a.offerType == "basegame"))
                 {
-                    games.Add(new Game()
+                    UsageResponse usage = null;
+                    try
                     {
-                        PluginId = Id,
+                        usage = api.GetUsage(info.pid.pidId, game.offerId, token);
+                    }
+                    catch (Exception e)
+                    {
+                        logger.Error(e, $"Failed to get usage data for {game.offerId}");
+                    }
+
+                    var gameName = game.offerId;
+                    try
+                    {
+                        var localData = GetLocalManifest(game.offerId);
+                        if (localData != null)
+                        {
+                            gameName = StringExtensions.NormalizeGameName(localData.localizableAttributes.displayName);
+                        }
+                    }
+                    catch (Exception e) when (!Environment.IsDebugBuild)
+                    {
+                        logger.Error(e, $"Failed to get Origin manifest for a {game.offerId}");
+                        continue;
+                    }
+
+                    games.Add(new GameInfo()
+                    {
                         Source = "Origin",
                         GameId = game.offerId,
-                        Name = game.offerId
+                        Name = gameName,
+                        LastActivity = usage?.lastSessionEndTimeStamp,
+                        Playtime = usage?.total ?? 0
                     });
                 }
 
@@ -356,47 +478,45 @@ namespace OriginLibrary
 
         #region ILibraryPlugin
 
-        public ILibraryClient Client { get; } = new OriginClient();
+        public override LibraryClient Client => new OriginClient();
 
-        public string LibraryIcon { get; }
+        public override string LibraryIcon => Origin.Icon;
 
-        public string Name { get; } = "Origin";
+        public override string Name => "Origin";
 
-        public Guid Id { get; } = Guid.Parse("85DD7072-2F20-4E76-A007-41035E390724");
+        public override Guid Id => Guid.Parse("85DD7072-2F20-4E76-A007-41035E390724");
 
-        public bool IsClientInstalled => Origin.IsInstalled;
-
-        public void Dispose()
+        public override LibraryPluginCapabilities Capabilities { get; } = new LibraryPluginCapabilities
         {
+            CanShutdownClient = true
+        };
 
-        }
-
-        public ISettings GetSettings(bool firstRunSettings)
+        public override ISettings GetSettings(bool firstRunSettings)
         {
             return LibrarySettings;
         }
 
-        public UserControl GetSettingsView(bool firstRunView)
+        public override UserControl GetSettingsView(bool firstRunView)
         {
             return new OriginLibrarySettingsView();
         }
 
-        public IGameController GetGameController(Game game)
+        public override IGameController GetGameController(Game game)
         {
-            return new OriginGameController(this, game, playniteApi);
+            return new OriginGameController(this, game, PlayniteApi);
         }
 
-        public IEnumerable<Game> GetGames()
+        public override IEnumerable<GameInfo> GetGames()
         {
-            var allGames = new List<Game>();
-            var installedGames = new Dictionary<string, Game>();
+            var allGames = new List<GameInfo>();
+            var installedGames = new Dictionary<string, GameInfo>();
             Exception importError = null;
 
             if (LibrarySettings.ImportInstalledGames)
             {
                 try
                 {
-                    installedGames = GetInstalledGames(true);
+                    installedGames = GetInstalledGames();
                     logger.Debug($"Found {installedGames.Count} installed Origin games.");
                     allGames.AddRange(installedGames.Values.ToList());
                 }
@@ -407,14 +527,19 @@ namespace OriginLibrary
                 }
             }
 
-            if (LibrarySettings.ImportUninstalledGames)
+            if (LibrarySettings.ConnectAccount)
             {
                 try
                 {
-                    var uninstalled = GetLibraryGames();
-                    logger.Debug($"Found {uninstalled.Count} library Origin games.");
+                    var libraryGames = GetLibraryGames();
+                    logger.Debug($"Found {libraryGames.Count} library Origin games.");
 
-                    foreach (var game in uninstalled)
+                    if (!LibrarySettings.ImportUninstalledGames)
+                    {
+                        libraryGames = libraryGames.Where(lg => installedGames.ContainsKey(lg.GameId)).ToList();
+                    }
+
+                    foreach (var game in libraryGames)
                     {
                         if (installedGames.TryGetValue(game.GameId, out var installed))
                         {
@@ -429,30 +554,31 @@ namespace OriginLibrary
                 }
                 catch (Exception e)
                 {
-                    logger.Error(e, "Failed to import uninstalled Origin games.");
+                    logger.Error(e, "Failed to import linked account Origin games details.");
                     importError = e;
                 }
             }
 
             if (importError != null)
             {
-                playniteApi.Notifications.Add(
+                PlayniteApi.Notifications.Add(new NotificationMessage(
                     dbImportMessageId,
-                    string.Format(playniteApi.Resources.FindString("LOCLibraryImportError"), Name) +
+                    string.Format(PlayniteApi.Resources.GetString("LOCLibraryImportError"), Name) +
                     System.Environment.NewLine + importError.Message,
-                    NotificationType.Error);
+                    NotificationType.Error,
+                    () => OpenSettingsView()));
             }
             else
             {
-                playniteApi.Notifications.Remove(dbImportMessageId);
+                PlayniteApi.Notifications.Remove(dbImportMessageId);
             }
 
             return allGames;
         }
 
-        public ILibraryMetadataProvider GetMetadataDownloader()
+        public override LibraryMetadataProvider GetMetadataDownloader()
         {
-            return new OriginMetadataProvider(playniteApi);
+            return new OriginMetadataProvider(this);
         }
 
         #endregion ILibraryPlugin

@@ -9,15 +9,170 @@ using System.Web;
 using AngleSharp.Dom;
 using AngleSharp.Parser.Html;
 using Newtonsoft.Json;
-using NLog;
+using Playnite.Common.Web;
+using Playnite.SDK;
+using Playnite.SDK.Metadata;
 using Playnite.SDK.Models;
-using Playnite.Web;
+using Playnite.SDK.Plugins;
 
 namespace Playnite.Metadata.Providers
 {
-    public class WikipediaMetadataProvider
+
+    public class WikipediaSearchItem : GenericItemOption
     {
-        private static Logger logger = LogManager.GetCurrentClassLogger();
+        public string Title { get; set; }
+    }
+
+    public class OnDemandWikipediaMetadata : OnDemandMetadataProvider
+    {
+        private readonly WikipediaMetadataPlugin plugin;
+        private readonly MetadataRequestOptions options;
+        private GameMetadata gameData;
+
+        private List<MetadataField> availableFields;
+        public override List<MetadataField> AvailableFields
+        {
+            get
+            {
+                if (availableFields == null)
+                {
+                    availableFields = GetAvailableFields();
+                }
+
+                return availableFields;
+            }
+        }
+
+        public OnDemandWikipediaMetadata(WikipediaMetadataPlugin plugin, MetadataRequestOptions options)
+        {
+            this.options = options;
+            this.plugin = plugin;
+        }
+
+        public override DateTime? GetReleaseDate()
+        {
+            if (AvailableFields.Contains(MetadataField.ReleaseDate))
+            {
+                return gameData.GameInfo.ReleaseDate;
+            }
+
+            return base.GetReleaseDate();
+        }
+
+        public override List<string> GetDevelopers()
+        {
+            if (AvailableFields.Contains(MetadataField.Developers))
+            {
+                return gameData.GameInfo.Developers;
+            }
+
+            return base.GetDevelopers();
+        }
+
+        public override List<string> GetPublishers()
+        {
+            if (AvailableFields.Contains(MetadataField.Publishers))
+            {
+                return gameData.GameInfo.Publishers;
+            }
+
+            return base.GetPublishers();
+        }
+
+        public override MetadataFile GetCoverImage()
+        {
+            if (AvailableFields.Contains(MetadataField.ReleaseDate))
+            {
+                return gameData.CoverImage;
+            }
+
+            return base.GetCoverImage();
+        }
+
+        public override string GetName()
+        {
+            if (AvailableFields.Contains(MetadataField.Name))
+            {
+                return gameData.GameInfo.Name;
+            }
+
+            return base.GetName();
+        }
+
+        private List<MetadataField> GetAvailableFields()
+        {
+            var fields = new List<MetadataField>();
+            if (gameData == null)
+            {
+                GetData();
+            }
+
+            if (!gameData.IsEmpty)
+            {
+                fields.Add(MetadataField.Name);
+                if (gameData.GameInfo.Publishers.HasItems())
+                {
+                    fields.Add(MetadataField.Publishers);
+                }
+
+                if (gameData.GameInfo.Developers.HasItems())
+                {
+                    fields.Add(MetadataField.Developers);
+                }
+
+                if (gameData.GameInfo.ReleaseDate != null)
+                {
+                    fields.Add(MetadataField.ReleaseDate);
+                }
+
+                if (gameData.CoverImage != null)
+                {
+                    fields.Add(MetadataField.CoverImage);
+                }
+            }
+
+            return fields;
+        }
+
+
+        private void GetData()
+        {
+            if (options.IsBackgroundDownload)
+            {
+                throw new NotImplementedException();
+            }
+            else
+            {
+                var item = plugin.PlayniteApi.Dialogs.ChooseItemWithSearch(null, (a) => plugin.SearchMetadata(a), options.GameData.Name);
+                if (item == null)
+                {
+                    gameData = GameMetadata.GetEmptyData();
+                }
+                else
+                {
+                    var searchItem = item as WikipediaSearchItem;
+                    gameData = plugin.ParseGamePage(plugin.GetPage(searchItem.Title));
+                }
+            }
+        }
+    }
+
+    public class WikipediaMetadataPlugin : MetadataPlugin
+    {
+        private static ILogger logger = LogManager.GetLogger();
+
+        public override string Name => "Wikipedia";
+
+        public override List<MetadataField> SupportedFields { get; } = new List<MetadataField>
+        {
+            MetadataField.ReleaseDate,
+            MetadataField.Developers,
+            MetadataField.Publishers,
+            MetadataField.CoverImage,
+            MetadataField.Name
+        };
+
+        public override Guid Id { get; } = new Guid("88A920B3-B35C-4C30-A8E7-88BFCC2320EE");
 
         public class Error
         {
@@ -87,12 +242,17 @@ namespace Playnite.Metadata.Providers
             }
         }
 
-        public WikipediaMetadataProvider()
+        public WikipediaMetadataPlugin(IPlayniteAPI playniteAPI) : base(playniteAPI)
         {
         }
 
-        public List<SearchResult> Search(string searchTerm)
+        public List<GenericItemOption> SearchMetadata(string searchTerm)
         {
+            if (searchTerm.IsNullOrEmpty())
+            {
+                return new List<GenericItemOption>();
+            }
+
             var url = string.Format(@"https://en.wikipedia.org/w/api.php?action=query&srsearch={0}&format=json&list=search&srlimit=50", HttpUtility.UrlEncode(searchTerm));
             var stringResult = HttpDownloader.DownloadString(url);
             var result = JsonConvert.DeserializeObject<SearchResponse>(stringResult);
@@ -103,13 +263,19 @@ namespace Playnite.Metadata.Providers
             }
             else
             {
+                var ret = new List<GenericItemOption>();
                 var parser = new HtmlParser();
                 foreach (var searchResult in result.query.search)
                 {
-                    searchResult.snippet = parser.Parse(searchResult.snippet).DocumentElement.TextContent;
+                    ret.Add(new WikipediaSearchItem
+                    {
+                        Title = searchResult.title,
+                        Name = searchResult.title,
+                        Description = parser.Parse(searchResult.snippet).DocumentElement.TextContent
+                    });
                 }
 
-                return result.query.search;
+                return ret;
             }
         }
 
@@ -129,17 +295,18 @@ namespace Playnite.Metadata.Providers
             }
         }
 
-        public Game ParseGamePage(WikiPage page, string gameName = "")
+        public GameMetadata ParseGamePage(WikiPage page, string gameName = "")
         {
-            logger.Info("Parsing wiki page " + page.title);
-            var game = new Game();
+            logger.Info("Parsing wiki page " + page.title);            
+            var gameInfo = new GameInfo();
+            var metadata = new GameMetadata() { GameInfo = gameInfo };
             var parser = new HtmlParser();
             var document = parser.Parse(@"<html><head></head><body>" + page.text["*"] + @"</body></html>?");
             var tables = document.QuerySelectorAll("table.infobox.hproduct");
 
             if (tables.Length == 0)
             {
-                return game;
+                return metadata;
             }
 
             IElement infoTable = null;
@@ -175,7 +342,7 @@ namespace Playnite.Metadata.Providers
             var nameField = rows[0].QuerySelector("th");
             if (nameField != null)
             {
-                game.Name = rows[0].QuerySelector("th").TextContent.Replace('\n', ' ');
+                gameInfo.Name = rows[0].QuerySelector("th").TextContent.Replace('\n', ' ');
                 imageRowIndex = 1;
             }
 
@@ -211,11 +378,14 @@ namespace Playnite.Metadata.Providers
                 image = "http:" + image;
             }
 
-            game.CoverImage = image;
+            if (!image.IsNullOrEmpty())
+            {
+                metadata.CoverImage = new MetadataFile(image);
+            }
 
             // Other fields
             var gameProperties = new Dictionary<string, string>();
-            int startIndex = (string.IsNullOrEmpty(image) || string.IsNullOrEmpty(game.Name)) ? 1 : 2;
+            int startIndex = (string.IsNullOrEmpty(image) || string.IsNullOrEmpty(gameInfo.Name)) ? 1 : 2;
             for (int i = startIndex; i < rows.Length; i++)
             {
                 var row = rows[i];
@@ -225,23 +395,23 @@ namespace Playnite.Metadata.Providers
 
                 if (rowName.IndexOf("developer", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    game.Developers = new ComparableList<string>(rowValue.Split(new char[] { '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                        .Select(a => Regex.Replace(a, @"\[\d+\]", "").Trim()));
+                    gameInfo.Developers = rowValue.Split(new char[] { '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(a => Regex.Replace(a, @"\[\d+\]", "").Trim()).ToList();
                     
                     continue;
                 }
 
                 if (rowName.IndexOf("publisher", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    game.Publishers = new ComparableList<string>(rowValue.Split(new char[] { '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                        .Select(a => Regex.Replace(a, @"\[\d+\]", "").Trim()));
+                    gameInfo.Publishers = rowValue.Split(new char[] { '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(a => Regex.Replace(a, @"\[\d+\]", "").Trim()).ToList();
                     continue;
                 }
 
                 if (rowName.IndexOf("genre", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    game.Genres = new ComparableList<string>(rowValue.Split(new char[] { '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                        .Select(a => Regex.Replace(a, @"\[\d+\]", "").Trim()));
+                    gameInfo.Genres = rowValue.Split(new char[] { '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(a => Regex.Replace(a, @"\[\d+\]", "").Trim()).ToList();
                     continue;
                 }
 
@@ -303,19 +473,24 @@ namespace Playnite.Metadata.Providers
 
                         if (validDate)
                         {
-                            game.ReleaseDate = dateTime;
+                            gameInfo.ReleaseDate = dateTime;
                             break;
                         }
                     }
 
-                    if (game.ReleaseDate != null)
+                    if (gameInfo.ReleaseDate != null)
                     {
                         continue;
                     }
                 }
             }
 
-            return game;
+            return metadata;
+        }
+
+        public override OnDemandMetadataProvider GetMetadataProvider(MetadataRequestOptions options)
+        {
+            return new OnDemandWikipediaMetadata(this, options);
         }
     }
 }
